@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -28,7 +29,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class TextToSpeechEngine @Inject constructor(
-    private val context: Context
+    private @ApplicationContext val context: Context
 ) : TextToSpeech.OnInitListener {
 
     private companion object {

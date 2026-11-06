@@ -17,6 +17,7 @@ import com.blindtechnexus.accessiblecamera.domain.repository.VoiceRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -31,7 +32,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class VoiceRepositoryImpl @Inject constructor(
-    private val context: Context,
+    private @ApplicationContext val context: Context,
     private val engine: TextToSpeechEngine
 ) : VoiceRepository {
 

@@ -16,6 +16,7 @@ import com.blindtechnexus.accessiblecamera.domain.model.MediaItem
 import com.blindtechnexus.accessiblecamera.domain.model.MediaType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,7 +27,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class MediaStoreDataSource @Inject constructor(
-    private val context: Context
+    private @ApplicationContext val context: Context
 ) {
 
     private val projection = buildList {

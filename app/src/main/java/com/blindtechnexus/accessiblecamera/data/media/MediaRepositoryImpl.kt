@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,7 +46,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class MediaRepositoryImpl @Inject constructor(
-    private val context: Context,
+    private @ApplicationContext val context: Context,
     private val mediaDao: MediaDao,
     private val trashDao: TrashDao,
     private val mediaStore: MediaStoreDataSource,

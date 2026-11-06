@@ -19,6 +19,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import java.util.Locale
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -29,7 +30,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class LocationProvider @Inject constructor(
-    private val context: Context
+    private @ApplicationContext val context: Context
 ) {
 
     data class GeoPoint(val latitude: Double, val longitude: Double, val placeName: String?)

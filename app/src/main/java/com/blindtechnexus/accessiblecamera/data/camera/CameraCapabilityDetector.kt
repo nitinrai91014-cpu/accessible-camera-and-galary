@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
@@ -47,7 +48,7 @@ import kotlin.coroutines.resume
  */
 @Singleton
 class CameraCapabilityDetector @Inject constructor(
-    private val context: Context
+    private @ApplicationContext val context: Context
 ) : CapabilityRepository {
 
     private companion object {

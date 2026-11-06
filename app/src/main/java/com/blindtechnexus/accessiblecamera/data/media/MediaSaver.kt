@@ -27,6 +27,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,7 +37,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class MediaSaver @Inject constructor(
-    private val context: Context,
+    private @ApplicationContext val context: Context,
     private val indexer: MediaIndexer,
     private val watermarkPainter: WatermarkPainter
 ) {

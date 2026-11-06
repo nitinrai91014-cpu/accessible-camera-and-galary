@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -66,7 +67,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class CameraController @Inject constructor(
-    private val context: Context
+    private @ApplicationContext val context: Context
 ) {
 
     private companion object {
