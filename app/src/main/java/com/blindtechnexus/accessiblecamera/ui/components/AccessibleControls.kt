@@ -102,7 +102,6 @@ fun AccessibleSwitchRow(
             .semantics(mergeDescendants = true) {
                 contentDescription = label
                 stateDescription = stateText
-                description?.let { }
                 if (!enabled) disabled()
             },
         color = MaterialTheme.colorScheme.surface,

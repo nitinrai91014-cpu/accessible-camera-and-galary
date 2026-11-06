@@ -442,14 +442,18 @@ class CameraController @Inject constructor(
         val bound = camera ?: return
         val state = bound.cameraInfo.exposureState
         if (!state.isExposureCompensationSupported) return
-        val clamped = index.coerceIn(state.exposureCompensationRange.lower, state.exposureCompensationRange.upper)
+        val clamped = index.coerceIn(
+            state.exposureCompensationRange.lower,
+            state.exposureCompensationRange.upper
+        )
         runCatching { bound.cameraControl.setExposureCompensationIndex(clamped) }
     }
 
     fun exposureState(): Pair<IntRange, Int>? {
         val state = camera?.cameraInfo?.exposureState ?: return null
         if (!state.isExposureCompensationSupported) return null
-        return state.exposureCompensationRange to state.exposureCompensationIndex
+        val range: android.util.Range<Int> = state.exposureCompensationRange
+        return (range.lower..range.upper) to state.exposureCompensationIndex
     }
 
     fun supportsExposureCompensation(): Boolean =

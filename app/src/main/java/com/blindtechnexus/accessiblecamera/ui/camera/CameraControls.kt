@@ -23,9 +23,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.Icon
@@ -367,14 +370,14 @@ fun ZoomControls(
     ) {
         CameraSquareButton(
             label = "Zoom out",
-            icon = androidx.compose.material.icons.Icons.Filled.Remove,
+            icon = Icons.Filled.Remove,
             onClick = onZoomOut,
             enabled = enabled && zoomRatio > minZoom,
             size = Dimens.MinimumTouchTarget
         )
         CameraSquareButton(
             label = String.format(java.util.Locale.US, "%.1f times", zoomRatio),
-            icon = androidx.compose.material.icons.Icons.Filled.Search,
+            icon = Icons.Filled.Search,
             onClick = onReset,
             enabled = enabled,
             contentDescription = "Zoom level ${String.format(java.util.Locale.US, "%.1f", zoomRatio)} times. Activate to reset zoom",
@@ -382,7 +385,7 @@ fun ZoomControls(
         )
         CameraSquareButton(
             label = "Zoom in",
-            icon = androidx.compose.material.icons.Icons.Filled.Add,
+            icon = Icons.Filled.Add,
             onClick = onZoomIn,
             enabled = enabled && zoomRatio < maxZoom,
             size = Dimens.MinimumTouchTarget
