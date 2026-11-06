@@ -113,7 +113,7 @@ class CameraController @Inject constructor(
             future.addListener({
                 val value = runCatching { future.get() }.getOrNull()
                 cameraProvider = value
-                if (continuation.isActive) continuation.resume(value)
+                if (continuation.isActive) continuation.resume(value) { }
             }, ContextCompat.getMainExecutor(context))
             continuation.invokeOnCancellation { }
         }

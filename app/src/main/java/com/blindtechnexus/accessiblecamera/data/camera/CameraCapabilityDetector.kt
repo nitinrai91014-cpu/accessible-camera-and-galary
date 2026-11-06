@@ -155,8 +155,8 @@ class CameraCapabilityDetector @Inject constructor(
         } else null
 
         val qualities: Set<Quality> = if (videoCapabilities != null) {
-            runCatching { videoCapabilities.getSupportedQualities() }
-                .getOrElse { emptySet<Quality>() }
+            val supported = runCatching { videoCapabilities.getSupportedQualities() }.getOrNull()
+            supported?.toSet() ?: emptySet()
         } else {
             emptySet()
         }
@@ -271,7 +271,7 @@ class CameraCapabilityDetector @Inject constructor(
             future.addListener({
                 val value = runCatching { future.get() }.getOrNull()
                 provider = value
-                if (continuation.isActive) continuation.resume(value)
+                if (continuation.isActive) continuation.resume(value) { }
             }, androidx.core.content.ContextCompat.getMainExecutor(context))
             continuation.invokeOnCancellation { }
         }
@@ -282,7 +282,7 @@ class CameraCapabilityDetector @Inject constructor(
             val future = ExtensionsManager.getInstanceAsync(context, cameraProvider)
             future.addListener({
                 val manager = runCatching { future.get() }.getOrNull()
-                if (continuation.isActive) continuation.resume(manager)
+                if (continuation.isActive) continuation.resume(manager) { }
             }, androidx.core.content.ContextCompat.getMainExecutor(context))
             continuation.invokeOnCancellation { }
         }

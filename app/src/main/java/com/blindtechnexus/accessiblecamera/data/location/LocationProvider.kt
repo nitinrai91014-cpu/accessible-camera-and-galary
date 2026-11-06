@@ -81,7 +81,7 @@ class LocationProvider @Inject constructor(
                     val listener = object : android.location.LocationListener {
                         override fun onLocationChanged(location: Location) {
                             locationManager.removeUpdates(this)
-                            if (continuation.isActive) continuation.resume(location)
+                            if (continuation.isActive) continuation.resumeWith(Result.success(location))
                         }
 
                         @Deprecated("Required by the platform interface", ReplaceWith(""))
@@ -95,7 +95,7 @@ class LocationProvider @Inject constructor(
                     runCatching {
                         locationManager.requestLocationUpdates(provider, 0L, 0f, listener, android.os.Looper.getMainLooper())
                     }.onFailure {
-                        if (continuation.isActive) continuation.resume(null)
+                        if (continuation.isActive) continuation.resumeWith(Result.success(null))
                     }
                 }
             }
