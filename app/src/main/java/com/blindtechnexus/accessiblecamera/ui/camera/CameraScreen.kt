@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -25,6 +26,8 @@ import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Cameraswitch
 import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -412,11 +415,7 @@ private fun CameraBottomBar(
             if (isVideoTab) {
                 CameraSquareButton(
                     label = "Sound",
-                    icon = if (state.audioEnabled) {
-                        androidx.compose.material.icons.Icons.Filled.VolumeUp
-                    } else {
-                        androidx.compose.material.icons.Icons.Filled.VolumeOff
-                    },
+                    icon = if (state.audioEnabled) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff,
                     onClick = onToggleAudio,
                     selected = state.audioEnabled,
                     enabled = state.capabilities.supportsAudioRecording,

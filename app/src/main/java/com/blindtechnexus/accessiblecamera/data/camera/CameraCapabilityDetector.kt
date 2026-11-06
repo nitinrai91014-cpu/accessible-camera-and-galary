@@ -52,6 +52,18 @@ class CameraCapabilityDetector @Inject constructor(
 
     private companion object {
         const val TAG = "CameraCapability"
+
+        /** CameraX error codes surfaced as spoken failures. */
+        fun describeCameraError(code: Int): String = when (code) {
+            CameraState.ERROR_CAMERA_IN_USE -> "The camera is in use by another app"
+            CameraState.ERROR_MAX_CAMERAS_IN_USE -> "Too many cameras are already open"
+            CameraState.ERROR_OTHER_RECOVERABLE_ERROR -> "The camera reported a recoverable error"
+            CameraState.ERROR_STREAM_CONFIG -> "The camera could not use this configuration"
+            CameraState.ERROR_CAMERA_DISABLED -> "The camera is disabled by device policy"
+            CameraState.ERROR_CAMERA_FATAL_ERROR -> "The camera reported a fatal error"
+            CameraState.ERROR_DO_NOT_DISTURB_MODE_ENABLED -> "The camera is unavailable while do not disturb is on"
+            else -> "The camera reported an unknown error"
+        }
     }
 
     private val reader = CameraCharacteristicsReader()
@@ -138,13 +150,16 @@ class CameraCapabilityDetector @Inject constructor(
         val primaryInfo = primaryBack?.let { lens ->
             infos.firstOrNull { androidx.camera.camera2.interop.Camera2CameraInfo.from(it).cameraId == lens.id }
         }
-        val videoCapabilities = if (primaryInfo != null) {
+        val videoCapabilities: androidx.camera.video.VideoCapabilities? = if (primaryInfo != null) {
             runCatching { Recorder.getVideoCapabilities(primaryInfo) }.getOrNull()
         } else null
 
-        val qualities = if (videoCapabilities != null) {
-            runCatching { videoCapabilities.supportedQualities }.getOrDefault(emptySet())
-        } else emptySet<Quality>()
+        val qualities: Set<Quality> = if (videoCapabilities != null) {
+            runCatching { videoCapabilities.getSupportedQualities() }
+                .getOrElse { emptySet<Quality>() }
+        } else {
+            emptySet()
+        }
 
         if (qualities.isNotEmpty()) {
             supportedModes += CameraMode.VIDEO
@@ -167,23 +182,12 @@ class CameraCapabilityDetector @Inject constructor(
                 )
             }
 
-        val frameRates: List<Int> = if (videoCapabilities != null) {
-            val qualityForRates = qualities.maxByOrNull { qualityRank(it) } ?: Quality.FHD
-            val supportedRange = runCatching {
-                videoCapabilities.getSupportedFrameRatesFor(qualityForRates)
-            }.getOrNull()
-            if (supportedRange == null) {
-                listOf(30)
-            } else {
-                listOf(24, 30, 60).filter { fps ->
-                    fps >= supportedRange.lower && fps <= supportedRange.upper
-                }.ifEmpty { listOf(30) }
-            }
-        } else {
-            listOf(24, 30)
-        }
-
         val maxFrameRate = lenses.maxOfOrNull { it.maxVideoFrameRate } ?: 30
+        // Only advertise frame rates the device actually declares, and always include the
+        // safe default so the recorder can bind on unusual hardware.
+        val frameRates: List<Int> = listOf(24, 30, 60, 120)
+            .filter { fps -> fps == 30 || fps <= maxFrameRate }
+            .ifEmpty { listOf(30) }
         if (supportedModes.contains(CameraMode.VIDEO) && maxFrameRate >= 60) {
             supportedModes += CameraMode.SLOW_MOTION
         } else {
@@ -235,7 +239,7 @@ class CameraCapabilityDetector @Inject constructor(
         notes += "Detected ${lenses.size} camera lenses."
         notes += "Hardware level: ${primaryBack?.hardwareLevel ?: "Unknown"}."
 
-        CameraCapabilities(
+        return CameraCapabilities(
             hasAnyCamera = lenses.isNotEmpty(),
             lenses = lenses,
             supportedModes = supportedModes,
@@ -269,6 +273,7 @@ class CameraCapabilityDetector @Inject constructor(
                 provider = value
                 if (continuation.isActive) continuation.resume(value)
             }, androidx.core.content.ContextCompat.getMainExecutor(context))
+            continuation.invokeOnCancellation { }
         }
     }
 
@@ -279,6 +284,7 @@ class CameraCapabilityDetector @Inject constructor(
                 val manager = runCatching { future.get() }.getOrNull()
                 if (continuation.isActive) continuation.resume(manager)
             }, androidx.core.content.ContextCompat.getMainExecutor(context))
+            continuation.invokeOnCancellation { }
         }
 
     fun selectorFor(lens: LensInfo?): CameraSelector {
@@ -354,17 +360,4 @@ class CameraCapabilityDetector @Inject constructor(
         else -> "Camera state unknown"
     }
 
-    companion object {
-        /** CameraX error codes surfaced as spoken failures. */
-        fun describeCameraError(code: Int): String = when (code) {
-            CameraState.ERROR_CAMERA_IN_USE -> "The camera is in use by another app"
-            CameraState.ERROR_MAX_CAMERAS_IN_USE -> "Too many cameras are already open"
-            CameraState.ERROR_OTHER_RECOVERABLE_ERROR -> "The camera reported a recoverable error"
-            CameraState.ERROR_STREAM_CONFIG -> "The camera could not use this configuration"
-            CameraState.ERROR_CAMERA_DISABLED -> "The camera is disabled by device policy"
-            CameraState.ERROR_CAMERA_FATAL_ERROR -> "The camera reported a fatal error"
-            CameraState.ERROR_DO_NOT_DISTURB_MODE_ENABLED -> "The camera is unavailable while do not disturb is on"
-            else -> "The camera reported an unknown error"
-        }
-    }
 }

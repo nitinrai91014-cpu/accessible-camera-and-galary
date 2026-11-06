@@ -48,7 +48,15 @@ class CameraCharacteristicsReader {
         val availableVideoStabilization = characteristic(
             CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES
         ) ?: intArrayOf()
-        val availableAwbModes = characteristic(CameraCharacteristics.CONTROL_AVAILABLE_AWB_MODES) ?: intArrayOf()
+        // CONTROL_AWB_AVAILABLE_MODES only exists on API 33 and later. Fall back to
+        // assuming auto white balance only when the newer key is unavailable.
+        val availableAwbModes: IntArray = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            runCatching {
+                characteristic(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)
+            }.getOrNull() ?: intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        } else {
+            intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        }
         val availableAfModes = characteristic(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
         val availableAeModes = characteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: intArrayOf()
         val maxFrameRate = characteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)

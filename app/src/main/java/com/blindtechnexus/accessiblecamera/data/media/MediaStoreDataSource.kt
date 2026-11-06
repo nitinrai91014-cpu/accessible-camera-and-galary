@@ -93,9 +93,9 @@ class MediaStoreDataSource @Inject constructor(
         } else null
         val sortOrder = "${MediaStore.MediaColumns.DATE_TAKEN} DESC"
         val bundle = Bundle().apply {
-            putInt(MediaStore.QUERY_ARG_LIMIT, limit)
-            putInt(MediaStore.QUERY_ARG_OFFSET, offset)
-            putString(MediaStore.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
+            putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, limit)
+            putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
+            putString(android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
         }
         val cursor = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

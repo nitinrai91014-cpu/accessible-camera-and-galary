@@ -57,39 +57,42 @@ internal object SettingsMapper {
             shareLocationWithWatermark = preferences[SettingsKeys.SHARE_LOCATION_WATERMARK] ?: defaults.shareLocationWithWatermark
         )
     }
-
-    fun MutablePreferences.writeAll(settings: AppSettings) {
-        this[SettingsKeys.ONBOARDING_COMPLETE] = settings.hasCompletedOnboarding
-        this[SettingsKeys.VOICE_GUIDANCE] = settings.voiceGuidanceEnabled
-        this[SettingsKeys.SPEECH_RATE] = settings.speechRate
-        this[SettingsKeys.SPEECH_PITCH] = settings.speechPitch
-        this[SettingsKeys.VERBOSITY] = settings.verbosity.name
-        this[SettingsKeys.HAPTICS] = settings.hapticsEnabled
-        this[SettingsKeys.AUDIO_CUES] = settings.audioCuesEnabled
-        this[SettingsKeys.THEME] = settings.themeMode.name
-        this[SettingsKeys.FONT_SCALE] = settings.fontScale.name
-        this[SettingsKeys.GALLERY_LAYOUT] = settings.galleryLayout.name
-        this[SettingsKeys.SHOW_GRID] = settings.showGridLines
-        this[SettingsKeys.SHOW_LEVEL] = settings.showLevelIndicator
-        this[SettingsKeys.MIRROR_FRONT] = settings.mirrorFrontCamera
-        this[SettingsKeys.SAVE_LOCATION] = settings.saveLocation.name
-        this[SettingsKeys.DEFAULT_VIDEO_QUALITY] = settings.defaultVideoQuality
-        this[SettingsKeys.TIMER_DEFAULT] = settings.timerDefault.name
-        this[SettingsKeys.GEOTAGGING] = settings.geotaggingEnabled
-        this[SettingsKeys.WATERMARK] = settings.watermarkEnabled
-        this[SettingsKeys.WATERMARK_TEXT] = settings.watermarkText
-        this[SettingsKeys.FACE_GUIDANCE] = settings.faceGuidanceEnabled
-        this[SettingsKeys.SCENE_INTERVAL] = settings.sceneDescriptionInterval.name
-        this[SettingsKeys.VOICE_COMMANDS] = settings.voiceCommandsEnabled
-        this[SettingsKeys.VOLUME_KEY_SHUTTER] = settings.volumeKeyShutterEnabled
-        this[SettingsKeys.REVIEW_AFTER_CAPTURE] = settings.reviewAfterCapture
-        this[SettingsKeys.ORIENTATION_LOCK] = settings.orientationLocked
-        this[SettingsKeys.KEEP_SCREEN_ON] = settings.keepScreenOn
-        this[SettingsKeys.RECORDING_ANNOUNCE_SECONDS] = settings.recordingTimerAnnounceSeconds
-        this[SettingsKeys.DEBUG_LOGGING] = settings.remoteDebugLogging
-        this[SettingsKeys.SHARE_LOCATION_WATERMARK] = settings.shareLocationWithWatermark
-    }
-
-    private inline fun <reified T : Enum<T>> enumOr(name: String?, fallback: T): T =
-        if (name == null) fallback else runCatching { enumValueOf<T>(name) }.getOrDefault(fallback)
 }
+
+/**
+ * Writes a full [AppSettings] snapshot. Kept top level so repositories can import it.
+ */
+fun MutablePreferences.writeAll(settings: AppSettings) {
+    this[SettingsKeys.ONBOARDING_COMPLETE] = settings.hasCompletedOnboarding
+    this[SettingsKeys.VOICE_GUIDANCE] = settings.voiceGuidanceEnabled
+    this[SettingsKeys.SPEECH_RATE] = settings.speechRate
+    this[SettingsKeys.SPEECH_PITCH] = settings.speechPitch
+    this[SettingsKeys.VERBOSITY] = settings.verbosity.name
+    this[SettingsKeys.HAPTICS] = settings.hapticsEnabled
+    this[SettingsKeys.AUDIO_CUES] = settings.audioCuesEnabled
+    this[SettingsKeys.THEME] = settings.themeMode.name
+    this[SettingsKeys.FONT_SCALE] = settings.fontScale.name
+    this[SettingsKeys.GALLERY_LAYOUT] = settings.galleryLayout.name
+    this[SettingsKeys.SHOW_GRID] = settings.showGridLines
+    this[SettingsKeys.SHOW_LEVEL] = settings.showLevelIndicator
+    this[SettingsKeys.MIRROR_FRONT] = settings.mirrorFrontCamera
+    this[SettingsKeys.SAVE_LOCATION] = settings.saveLocation.name
+    this[SettingsKeys.DEFAULT_VIDEO_QUALITY] = settings.defaultVideoQuality
+    this[SettingsKeys.TIMER_DEFAULT] = settings.timerDefault.name
+    this[SettingsKeys.GEOTAGGING] = settings.geotaggingEnabled
+    this[SettingsKeys.WATERMARK] = settings.watermarkEnabled
+    this[SettingsKeys.WATERMARK_TEXT] = settings.watermarkText
+    this[SettingsKeys.FACE_GUIDANCE] = settings.faceGuidanceEnabled
+    this[SettingsKeys.SCENE_INTERVAL] = settings.sceneDescriptionInterval.name
+    this[SettingsKeys.VOICE_COMMANDS] = settings.voiceCommandsEnabled
+    this[SettingsKeys.VOLUME_KEY_SHUTTER] = settings.volumeKeyShutterEnabled
+    this[SettingsKeys.REVIEW_AFTER_CAPTURE] = settings.reviewAfterCapture
+    this[SettingsKeys.ORIENTATION_LOCK] = settings.orientationLocked
+    this[SettingsKeys.KEEP_SCREEN_ON] = settings.keepScreenOn
+    this[SettingsKeys.RECORDING_ANNOUNCE_SECONDS] = settings.recordingTimerAnnounceSeconds
+    this[SettingsKeys.DEBUG_LOGGING] = settings.remoteDebugLogging
+    this[SettingsKeys.SHARE_LOCATION_WATERMARK] = settings.shareLocationWithWatermark
+}
+
+private inline fun <reified T : Enum<T>> enumOr(name: String?, fallback: T): T =
+    if (name == null) fallback else runCatching { enumValueOf<T>(name) }.getOrDefault(fallback)

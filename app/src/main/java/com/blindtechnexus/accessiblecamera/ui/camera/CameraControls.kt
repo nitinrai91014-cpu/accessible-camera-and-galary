@@ -7,6 +7,7 @@
 package com.blindtechnexus.accessiblecamera.ui.camera
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -199,7 +200,7 @@ fun CameraSquareButton(
             .defaultMinSize(minWidth = size, minHeight = size)
             .semantics(mergeDescendants = true) {
                 role = Role.Button
-                contentDescription = contentDescription ?: combined
+                this.contentDescription = contentDescription ?: combined
                 stateText?.let { stateDescription = it }
                 if (!enabled) disabled()
             },

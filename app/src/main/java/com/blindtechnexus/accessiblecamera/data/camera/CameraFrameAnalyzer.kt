@@ -132,7 +132,11 @@ class CameraFrameAnalyzer @Inject constructor(
         }
 
         faceTask?.addOnSuccessListener { faces ->
-            val result = FaceAlignmentEvaluator.evaluate(faces, width, height)
+            val result = FaceAlignmentEvaluator.evaluate(
+                faces = faces.map { FaceAlignmentEvaluator.observationOf(it) },
+                frameWidth = width,
+                frameHeight = height
+            )
             _faceResult.value = result
             _faceGuidance.value = result.guidance
             maybeAnnounce(result)

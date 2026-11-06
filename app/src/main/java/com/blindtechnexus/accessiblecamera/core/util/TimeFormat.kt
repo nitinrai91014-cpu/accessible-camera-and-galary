@@ -31,13 +31,13 @@ object TimeFormat {
         val safe = if (millis < 0) 0 else millis
         val totalSeconds = TimeUnit.MILLISECONDS.toSeconds(safe)
         if (totalSeconds < 1L) return "less than a second"
-        val hours = totalSeconds / 3600
-        val minutes = (totalSeconds % 3600) / 60
-        val seconds = totalSeconds % 60
+        val hours = totalSeconds / 3600L
+        val minutes = (totalSeconds % 3600L) / 60L
+        val seconds = totalSeconds % 60L
         val parts = mutableListOf<String>()
-        if (hours > 0) parts += plural(hours, "hour")
-        if (minutes > 0) parts += plural(minutes, "minute")
-        if (seconds > 0 && hours == 0) parts += plural(seconds, "second")
+        if (hours > 0L) parts += plural(hours, "hour")
+        if (minutes > 0L) parts += plural(minutes, "minute")
+        if (seconds > 0L && hours == 0L) parts += plural(seconds, "second")
         return parts.joinToString(" ")
     }
 

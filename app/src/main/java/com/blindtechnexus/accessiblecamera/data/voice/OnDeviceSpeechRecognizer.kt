@@ -33,10 +33,6 @@ class OnDeviceSpeechRecognizer @Inject constructor(
     private val context: Context
 ) {
 
-    private companion object {
-        const val TAG = "OnDeviceSpeechRecognizer"
-    }
-
     private var recognizer: SpeechRecognizer? = null
     private var isListeningInternal = false
     private var continuousMode = false
@@ -211,6 +207,8 @@ class OnDeviceSpeechRecognizer @Inject constructor(
     }
 
     companion object {
+        private const val TAG = "OnDeviceSpeechRecognizer"
+
         fun isSpeechRecognitionAvailable(context: Context): Boolean =
             runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false)
 

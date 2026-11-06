@@ -6,13 +6,12 @@
  */
 package com.blindtechnexus.accessiblecamera.data.camera
 
-import com.google.mlkit.vision.face.Face
+import com.google.mlkit.vision.face.Face as MlKitFace
 import com.blindtechnexus.accessiblecamera.domain.model.FaceGuidance
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.google.mlkit.vision.label.ImageLabeling
@@ -161,7 +160,7 @@ object FaceAlignmentEvaluator {
     }
 
     /** Maps an ML Kit face onto the plain observation used by [evaluate]. */
-    fun observationOf(face: Face): FaceObservation {
+    fun observationOf(face: MlKitFace): FaceObservation {
         val bounds = face.boundingBox
         return FaceObservation(
             left = bounds.left,

@@ -115,6 +115,7 @@ class CameraController @Inject constructor(
                 cameraProvider = value
                 if (continuation.isActive) continuation.resume(value)
             }, ContextCompat.getMainExecutor(context))
+            continuation.invokeOnCancellation { }
         }
     }
 

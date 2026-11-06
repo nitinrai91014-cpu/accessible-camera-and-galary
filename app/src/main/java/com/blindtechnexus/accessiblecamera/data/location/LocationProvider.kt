@@ -14,21 +14,18 @@ import android.location.Location
 import android.location.LocationManager
 import android.os.Build
 import com.blindtechnexus.accessiblecamera.data.media.MediaPermissionEvaluator
-import com.google.android.gms.location.CurrentLocationRequest
-import com.google.android.gms.location.Granularity
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Location tagging, off by default. Uses the fused provider when Play services is present
- * and falls back to the platform location manager. Nothing is sent off the device except
- * the optional reverse geocoding call made by the platform Geocoder.
+ * Location tagging, off by default. Uses only the platform location manager, so the app has
+ * no dependency on Google Play services for coordinates. Nothing leaves the device except the
+ * optional reverse geocoding call made by the platform Geocoder.
  */
 @Singleton
 class LocationProvider @Inject constructor(
@@ -37,7 +34,6 @@ class LocationProvider @Inject constructor(
 
     data class GeoPoint(val latitude: Double, val longitude: Double, val placeName: String?)
 
-    private val fused by lazy { runCatching { LocationServices.getFusedLocationProviderClient(context) }.getOrNull() }
     private val manager by lazy { context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager }
 
     fun hasPermission(): Boolean =
@@ -53,8 +49,6 @@ class LocationProvider @Inject constructor(
     suspend fun lastKnown(): GeoPoint? = withContext(Dispatchers.IO) {
         if (!hasPermission()) return@withContext null
         val location = runCatching {
-            fused?.lastLocation?.await()
-        }.getOrNull() ?: runCatching {
             manager?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
                 ?: manager?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
         }.getOrNull()
@@ -64,18 +58,48 @@ class LocationProvider @Inject constructor(
     @SuppressLint("MissingPermission")
     suspend fun current(): GeoPoint? = withContext(Dispatchers.IO) {
         if (!hasPermission()) return@withContext null
-        val client = fused
-        if (client != null) {
-            val request = CurrentLocationRequest.Builder()
-                .setPriority(Priority.PRIORITY_BALANCED_POWER_ACCURACY)
-                .setGranularity(Granularity.GRANULARITY_COARSE)
-                .setMaxUpdateAgeMillis(120_000)
-                .setDurationMillis(4_000)
-                .build()
-            val location = runCatching { client.getCurrentLocation(request, null).await() }.getOrNull()
-            if (location != null) return@withContext toGeoPoint(location)
-        }
+        val fresh = requestSingleUpdate()
+        if (fresh != null) return@withContext toGeoPoint(fresh)
         lastKnown()
+    }
+
+    /**
+     * Asks the platform for one fresh fix with a short timeout. Returns null when nothing
+     * arrives quickly, so a geotagged capture never stalls.
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun requestSingleUpdate(): Location? {
+        val locationManager = manager ?: return null
+        val provider = listOf(
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER
+        ).firstOrNull { runCatching { locationManager.isProviderEnabled(it) }.getOrDefault(false) }
+            ?: return null
+        return withContext(Dispatchers.IO) {
+            kotlinx.coroutines.withTimeoutOrNull(4_000) {
+                suspendCancellableCoroutine { continuation ->
+                    val listener = object : android.location.LocationListener {
+                        override fun onLocationChanged(location: Location) {
+                            locationManager.removeUpdates(this)
+                            if (continuation.isActive) continuation.resume(location)
+                        }
+
+                        @Deprecated("Required by the platform interface", ReplaceWith(""))
+                        override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) = Unit
+
+                        override fun onProviderEnabled(provider: String) = Unit
+
+                        override fun onProviderDisabled(provider: String) = Unit
+                    }
+                    continuation.invokeOnCancellation { locationManager.removeUpdates(listener) }
+                    runCatching {
+                        locationManager.requestLocationUpdates(provider, 0L, 0f, listener, android.os.Looper.getMainLooper())
+                    }.onFailure {
+                        if (continuation.isActive) continuation.resume(null)
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun toGeoPoint(location: Location): GeoPoint {

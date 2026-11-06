@@ -54,6 +54,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -282,7 +283,7 @@ class CameraViewModel @Inject constructor(
         if (_uiState.value.state == CameraState.INITIALIZING) return
         _uiState.update { it.copy(state = CameraState.INITIALIZING, failure = null) }
         viewModelScope.launch {
-            val capabilities = capabilityRepository.capabilities.value
+            val capabilities = capabilityRepository.capabilities.first()
             val provider = cameraController.provider()
             if (provider == null) {
                 failWith(
