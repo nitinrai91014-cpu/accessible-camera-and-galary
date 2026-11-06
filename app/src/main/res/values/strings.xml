@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Accessible Camera and Gallery</string>
+    <string name="app_short_name">Accessible Camera</string>
+    <string name="developer_credit">Developed by Sujan Rai of the Blind Tech Nexus team.</string>
+
+    <string name="welcome_title">Accessible Camera and Gallery</string>
+    <string name="welcome_description">An accessible, open-source camera and gallery app for Android. Take photos, record video, and manage your media with full screen reader support and voice guidance.</string>
+    <string name="welcome_permission_heading">What this app uses</string>
+    <string name="welcome_permission_camera">Camera: to show the viewfinder and take photos or record video.</string>
+    <string name="welcome_permission_microphone">Microphone: only while you record video with sound turned on.</string>
+    <string name="welcome_permission_media">Photos and videos: to show your gallery and open your captures.</string>
+    <string name="welcome_permission_location">Location: optional, only if you turn on location tagging in Settings.</string>
+    <string name="welcome_privacy">Everything stays on your device. There is no analytics and no network access without your consent.</string>
+    <string name="welcome_start">Start</string>
+    <string name="welcome_settings_hint">You can change voice guidance and accessibility options at any time in the Settings tab.</string>
+
+    <string name="tab_photo">Photo</string>
+    <string name="tab_video">Video</string>
+    <string name="tab_gallery">Gallery</string>
+    <string name="tab_settings">Settings</string>
+
+    <string name="action_back">Back</string>
+    <string name="action_close">Close</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_confirm">Confirm</string>
+    <string name="action_undo">Undo</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_done">Done</string>
+    <string name="action_apply">Apply</string>
+    <string name="action_reset">Reset</string>
+    <string name="action_reset_all">Reset all settings</string>
+    <string name="action_more">More options</string>
+    <string name="action_advanced">Advanced controls</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_share">Share</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_details">Details</string>
+
+    <string name="permission_denied_title">Permission needed</string>
+    <string name="open_app_settings">Open app settings</string>
+
+    <string name="not_available">Not available on this device</string>
+    <string name="loading">Loading</string>
+</resources>
