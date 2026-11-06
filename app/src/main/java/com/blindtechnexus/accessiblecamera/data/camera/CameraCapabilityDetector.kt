@@ -155,7 +155,9 @@ class CameraCapabilityDetector @Inject constructor(
         } else null
 
         val qualities: Set<Quality> = if (videoCapabilities != null) {
-            val supported = runCatching { videoCapabilities.getSupportedQualities() }.getOrNull()
+            val supported = runCatching {
+                videoCapabilities.getSupportedQualities(DynamicRange.SDR)
+            }.getOrNull()
             supported?.toSet() ?: emptySet()
         } else {
             emptySet()
