@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: android-${{ github.ref }}
@@ -60,6 +61,32 @@ jobs:
           name: accessible-camera-release-apk
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: warn
+
+      - name: Publish errors as a pull request comment
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          combined="$(cat "$RUNNER_TEMP/test.log" 2>/dev/null || true)"
+          combined+=$'\n'"$(cat "$RUNNER_TEMP/build.log" 2>/dev/null || true)"
+          if [[ -z "${combined// }" ]]; then
+            echo "No build logs were produced."
+            exit 0
+          fi
+          excerpt=$(printf '%s\n' "$combined" | grep -E 'e: |error: |What went wrong|Caused by|FAILURE|warning: ' | head -200 || true)
+          if [[ -z "$excerpt" ]]; then
+            excerpt=$(printf '%s\n' "$combined" | tail -80)
+          fi
+          {
+            echo "### CI build failed"
+            echo
+            echo '```'
+            printf '%s\n' "$excerpt" | cut -c1-400
+            echo '```'
+          } > "$RUNNER_TEMP/comment.md"
+          gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md" || true
 
       - name: Upload test report
         if: always()
