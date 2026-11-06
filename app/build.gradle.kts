@@ -18,7 +18,6 @@ android {
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
-        resourceConfigurations += listOf("en")
     }
 
     buildTypes {
@@ -41,14 +40,21 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-        freeCompilerArgs += listOf(
-            "-opt-in=kotlin.RequiresOptIn",
-            "-opt-in=androidx.camera.core.ExperimentalZeroShutterLag",
-            "-opt-in=androidx.camera.core.UseCaseGroup$UseCaseApi",
-            "-Xjvm-default=all"
-        )
+    androidResources {
+        localeFilters += listOf("en")
+    }
+
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+            optIn.addAll(
+                listOf(
+                    "kotlin.RequiresOptIn",
+                    "androidx.camera.core.ExperimentalZeroShutterLag"
+                )
+            )
+            freeCompilerArgs.addAll(listOf("-Xjvm-default=all"))
+        }
     }
 
     buildFeatures {
