@@ -45,19 +45,8 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          : > "$RUNNER_TEMP/tests.txt"
-          shopt -s nullglob
-          for f in app/build/test-results/testDebugUnitTest/*.xml; do
-            python3 - "$f" >> "$RUNNER_TEMP/tests.txt" <<'PYEOF'
-import sys, xml.etree.ElementTree as ET
-root = ET.parse(sys.argv[1]).getroot()
-for case in root.iter('testcase'):
-    for fail in list(case.findall('failure')) + list(case.findall('error')):
-        text = (fail.get('message') or '') + ' ' + (fail.text or '')
-        print('TEST FAILED: {} :: {}'.format(case.get('name'), ' '.join(text.split())[:600]))
-PYEOF
-          done
-          cat "$RUNNER_TEMP/tests.txt" || true
+          python3 tools/collect_test_failures.py app/build/test-results/testDebugUnitTest > "$RUNNER_TEMP/tests.txt" || true
+          head -c 4000 "$RUNNER_TEMP/tests.txt"
 
       - name: Report failure details
         if: failure()
@@ -94,7 +83,7 @@ PYEOF
             echo "No build logs were produced."
             exit 0
           fi
-          excerpt=$(printf '%s\n' "$combined" | grep -E 'TEST FAILED|e: |error: |What went wrong|Caused by|FAILURE|warning: ' | head -200 || true)
+          excerpt=$(printf '%s\n' "$combined" | grep -vE '^w: ' | grep -E 'TEST FAILED|e: |error: |What went wrong|Caused by|FAILURE' | head -120 || true)
           if [[ -z "$excerpt" ]]; then
             excerpt=$(printf '%s\n' "$combined" | tail -80)
           fi
