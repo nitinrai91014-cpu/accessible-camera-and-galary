@@ -41,6 +41,24 @@ jobs:
           set -o pipefail
           ./gradlew --no-daemon --stacktrace :app:assembleRelease 2>&1 | tee "$RUNNER_TEMP/build.log"
 
+      - name: Collect failing test details
+        if: failure()
+        shell: bash
+        run: |
+          : > "$RUNNER_TEMP/tests.txt"
+          shopt -s nullglob
+          for f in app/build/test-results/testDebugUnitTest/*.xml; do
+            python3 - "$f" >> "$RUNNER_TEMP/tests.txt" <<'PYEOF'
+import sys, xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot()
+for case in root.iter('testcase'):
+    for fail in list(case.findall('failure')) + list(case.findall('error')):
+        text = (fail.get('message') or '') + ' ' + (fail.text or '')
+        print('TEST FAILED: {} :: {}'.format(case.get('name'), ' '.join(text.split())[:600]))
+PYEOF
+          done
+          cat "$RUNNER_TEMP/tests.txt" || true
+
       - name: Report failure details
         if: failure()
         shell: bash
@@ -69,13 +87,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          combined="$(cat "$RUNNER_TEMP/test.log" 2>/dev/null || true)"
+          combined="$(cat "$RUNNER_TEMP/tests.txt" 2>/dev/null || true)"
+          combined+=$'\n'"$(cat "$RUNNER_TEMP/test.log" 2>/dev/null || true)"
           combined+=$'\n'"$(cat "$RUNNER_TEMP/build.log" 2>/dev/null || true)"
           if [[ -z "${combined// }" ]]; then
             echo "No build logs were produced."
             exit 0
           fi
-          excerpt=$(printf '%s\n' "$combined" | grep -E 'e: |error: |What went wrong|Caused by|FAILURE|warning: ' | head -200 || true)
+          excerpt=$(printf '%s\n' "$combined" | grep -E 'TEST FAILED|e: |error: |What went wrong|Caused by|FAILURE|warning: ' | head -200 || true)
           if [[ -z "$excerpt" ]]; then
             excerpt=$(printf '%s\n' "$combined" | tail -80)
           fi
