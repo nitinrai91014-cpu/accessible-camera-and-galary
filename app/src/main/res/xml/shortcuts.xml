@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="photo"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/tab_photo"
+        android:shortcutLongLabel="@string/tab_photo">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.blindtechnexus.accessiblecamera"
+            android:targetClass="com.blindtechnexus.accessiblecamera.MainActivity">
+            <extra android:name="shortcut_tab" android:value="photo" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="gallery"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/tab_gallery"
+        android:shortcutLongLabel="@string/tab_gallery">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.blindtechnexus.accessiblecamera"
+            android:targetClass="com.blindtechnexus.accessiblecamera.MainActivity">
+            <extra android:name="shortcut_tab" android:value="gallery" />
+        </intent>
+    </shortcut>
+</shortcuts>

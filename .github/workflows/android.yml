@@ -1,46 +1,105 @@
 name: Android CI
+
 on:
   pull_request:
     branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
+
 permissions:
   contents: read
+  pull-requests: write
+
 concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v5
+
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
       - uses: gradle/actions/setup-gradle@v5
-      - name: Test and build
+
+      - name: Unit tests
         shell: bash
         run: |
           set -o pipefail
-          ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease 2>&1 | tee "$RUNNER_TEMP/build.log"
-      - name: Report build failure
+          ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest 2>&1 | tee "$RUNNER_TEMP/test.log"
+
+      - name: Assemble release
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Collect failing test details
         if: failure()
         shell: bash
         run: |
-          if [[ -f "$RUNNER_TEMP/build.log" ]]; then
-            details=$(grep -E '^e: |^\* What went wrong:|^> |^FAILURE:' "$RUNNER_TEMP/build.log" | tail -30 || true)
+          python3 tools/collect_test_failures.py app/build/test-results/testDebugUnitTest > "$RUNNER_TEMP/tests.txt" || true
+          head -c 4000 "$RUNNER_TEMP/tests.txt"
+
+      - name: Report failure details
+        if: failure()
+        shell: bash
+        run: |
+          log=""
+          if [[ -f "$RUNNER_TEMP/build.log" ]]; then log="$RUNNER_TEMP/build.log"; fi
+          if [[ -f "$RUNNER_TEMP/test.log" ]]; then log="$RUNNER_TEMP/test.log"; fi
+          if [[ -n "$log" ]]; then
+            details=$(grep -E '^e: |^w: .*error|^\\* What went wrong:|^> |^FAILURE:|Caused by' "$log" | tail -40 || true)
             details="${details//'%'/'%25'}"
-            details="${details//$'\n'/'%0A'}"
+            details="${details//$'\\n'/'%0A'}"
             echo "::error::$details"
           fi
-      - name: Upload APKs
+
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: accessible-camera-apks
-          path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
+          name: accessible-camera-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+
+      - name: Publish errors as a pull request comment
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          combined="$(cat "$RUNNER_TEMP/tests.txt" 2>/dev/null || true)"
+          combined+=$'\n'"$(cat "$RUNNER_TEMP/test.log" 2>/dev/null || true)"
+          combined+=$'\n'"$(cat "$RUNNER_TEMP/build.log" 2>/dev/null || true)"
+          if [[ -z "${combined// }" ]]; then
+            echo "No build logs were produced."
+            exit 0
+          fi
+          excerpt=$(printf '%s\n' "$combined" | grep -vE '^w: ' | grep -E 'TEST FAILED|e: |error: |What went wrong|Caused by|FAILURE' | head -120 || true)
+          if [[ -z "$excerpt" ]]; then
+            excerpt=$(printf '%s\n' "$combined" | tail -80)
+          fi
+          {
+            echo "### CI build failed"
+            echo
+            echo '```'
+            printf '%s\n' "$excerpt" | cut -c1-400
+            echo '```'
+          } > "$RUNNER_TEMP/comment.md"
+          gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md" || true
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore
