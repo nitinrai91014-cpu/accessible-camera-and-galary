@@ -143,6 +143,7 @@ dependencies {
     implementation(libs.androidx.media3.transformer)
     implementation(libs.androidx.media3.effect)
     implementation(libs.androidx.media3.common)
+    implementation(libs.androidx.mediarouter)
 
     implementation(libs.coil.compose)
     implementation(libs.coil.video)

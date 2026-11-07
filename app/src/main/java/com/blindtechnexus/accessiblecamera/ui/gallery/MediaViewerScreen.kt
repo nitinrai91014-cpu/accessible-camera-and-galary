@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -38,6 +39,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -189,6 +191,7 @@ fun MediaViewerScreen(
                 onClick = { onEdit(currentItem) },
                 tint = Color.White
             )
+            CastButton(announce = announce)
             AccessibleIconButton(
                 icon = Icons.Filled.Share,
                 contentDescription = "Share this item",
@@ -509,5 +512,87 @@ fun SlideshowOverlay(
             onClick = { playing = !playing }
         )
         AccessibleSecondaryButton(text = "Stop slideshow", onClick = onClose)
+    }
+}
+
+/**
+ * Route video playback to a nearby cast device.
+ *
+ * Uses the Media Router button that ships with Play services, so there is no Cast SDK
+ * dependency. The custom wrapper keeps a spoken description of the current route so a blind
+ * user is never left guessing whether playback moved to a television. When no route exists the
+ * control is not composed at all, which keeps the toolbar short.
+ */
+@Composable
+private fun CastButton(announce: (String) -> Unit) {
+    val context = LocalContext.current
+    var routeCount by remember { mutableIntStateOf(0) }
+    var selectedName by remember { mutableStateOf<String?>(null) }
+
+    val selector = remember {
+        androidx.mediarouter.media.MediaRouteSelector.Builder()
+            .addControlCategory(
+                androidx.mediarouter.media.MediaControlIntent.CATEGORY_REMOTE_PLAYBACK
+            )
+            .build()
+    }
+
+    DisposableEffect(Unit) {
+        val router = androidx.mediarouter.media.MediaRouter.getInstance(context)
+        val callback = object : androidx.mediarouter.media.MediaRouter.Callback() {
+            override fun onRouteSelected(
+                router: androidx.mediarouter.media.MediaRouter,
+                route: androidx.mediarouter.media.MediaRouter.RouteInfo
+            ) {
+                selectedName = route.name
+                announce("Playing on ${route.name}")
+            }
+
+            override fun onRouteUnselected(
+                router: androidx.mediarouter.media.MediaRouter,
+                route: androidx.mediarouter.media.MediaRouter.RouteInfo
+            ) {
+                selectedName = null
+                announce("Playing on this device")
+            }
+
+            override fun onRouteAdded(
+                router: androidx.mediarouter.media.MediaRouter,
+                route: androidx.mediarouter.media.MediaRouter.RouteInfo
+            ) {
+                routeCount = router.routes.count { it.matchesSelector(selector) }
+            }
+
+            override fun onRouteRemoved(
+                router: androidx.mediarouter.media.MediaRouter,
+                route: androidx.mediarouter.media.MediaRouter.RouteInfo
+            ) {
+                routeCount = router.routes.count { it.matchesSelector(selector) }
+            }
+        }
+        router.addCallback(selector, callback)
+        routeCount = router.routes.count { it.matchesSelector(selector) }
+        onDispose { router.removeCallback(callback) }
+    }
+
+    if (routeCount == 0) return
+
+    Box(
+        modifier = Modifier
+            .size(Dimens.MinimumTouchTarget)
+            .semantics {
+                contentDescription = selectedName?.let { "Playing on $it. Choose another device" }
+                    ?: "Play on another device"
+            }
+    ) {
+        AndroidView(
+            factory = { viewContext ->
+                androidx.mediarouter.app.MediaRouteButton(viewContext).apply {
+                    setRouteSelector(selector)
+                    isFocusable = true
+                }
+            },
+            modifier = Modifier.matchParentSize()
+        )
     }
 }
