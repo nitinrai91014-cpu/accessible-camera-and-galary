@@ -29,6 +29,7 @@ import com.blindtechnexus.accessiblecamera.domain.model.PendingUndo
 import com.blindtechnexus.accessiblecamera.domain.model.SortOrder
 import com.blindtechnexus.accessiblecamera.domain.repository.MediaRepository
 import com.blindtechnexus.accessiblecamera.domain.repository.SettingsRepository
+import com.blindtechnexus.accessiblecamera.domain.usecase.TrashUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -76,7 +77,8 @@ class GalleryViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val mediaRepository: MediaRepository,
     private val settingsRepository: SettingsRepository,
-    private val voice: VoiceRepositoryImpl
+    private val voice: VoiceRepositoryImpl,
+    private val trashUseCase: TrashUseCase
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(GalleryUiState())
@@ -282,14 +284,19 @@ class GalleryViewModel @Inject constructor(
 
     fun requestDelete(permanent: Boolean = false) {
         _uiState.update { it.copy(showDeleteConfirmation = true, permanentDelete = permanent) }
-        voice.announce(
-            if (permanent) {
-                "Confirm permanent deletion. This cannot be undone."
-            } else {
-                "Confirm delete. Items move to recently deleted and can be restored."
-            },
-            AnnouncementPriority.HIGH
-        )
+        val selection = selectedItems()
+        val spoken = if (permanent) {
+            trashUseCase.confirmationFor(selection).message
+        } else {
+            "Confirm delete. " +
+                if (selection.isEmpty()) {
+                    "Items move to recently deleted and can be restored."
+                } else {
+                    trashUseCase.trashSummary(selection).removePrefix("Moved")
+                        .replaceFirstChar { it.uppercase() }
+                }
+        }
+        voice.announce(spoken, AnnouncementPriority.HIGH)
     }
 
     fun cancelDelete() {
@@ -306,28 +313,19 @@ class GalleryViewModel @Inject constructor(
         if (items.isEmpty()) return
         viewModelScope.launch {
             if (state.permanentDelete) {
-                mediaRepository.deletePermanently(items)
+                val message = trashUseCase.deletePermanently(items)
                 voice.playCue(AudioCue.TRASH)
                 voice.vibrate(HapticCue.SUCCESS)
-                voice.announce(
-                    "${items.size} items permanently deleted",
-                    AnnouncementPriority.CRITICAL
-                )
+                voice.announce(message, AnnouncementPriority.CRITICAL)
                 _uiState.update { it.copy(details = null) }
             } else {
-                mediaRepository.deleteToTrash(items)
+                val message = trashUseCase.moveToTrash(items)
                 voice.playCue(AudioCue.TRASH)
                 voice.vibrate(HapticCue.SUCCESS)
-                voice.announce(
-                    "${items.size} items moved to recently deleted",
-                    AnnouncementPriority.HIGH
-                )
+                voice.announce(message, AnnouncementPriority.HIGH)
                 _uiState.update {
                     it.copy(
-                        pendingUndo = PendingUndo(
-                            items = items,
-                            message = "${items.size} items moved to recently deleted"
-                        ),
+                        pendingUndo = PendingUndo(items = items, message = message),
                         details = null
                     )
                 }

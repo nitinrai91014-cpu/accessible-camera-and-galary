@@ -51,6 +51,14 @@ data class MediaItem(
 ) {
     val isVideo: Boolean get() = type == MediaType.VIDEO
 
+    /** True for items the system or the app labelled as a screenshot. */
+    val isScreenshot: Boolean
+        get() = relativePath.contains("Screenshot", ignoreCase = true) ||
+            bucketName.contains("Screenshot", ignoreCase = true)
+
+    /** True while the item sits in the app trash rather than in the gallery. */
+    val inTrash: Boolean get() = isTrashed
+
     val spokenTitle: String
         get() = if (isVideo) "Video, $bucketName" else "Photo, $bucketName"
 

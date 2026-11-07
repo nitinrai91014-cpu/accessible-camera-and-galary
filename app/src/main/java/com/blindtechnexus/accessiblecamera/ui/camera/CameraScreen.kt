@@ -22,6 +22,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
@@ -201,7 +203,8 @@ fun CameraScreen(
                         },
                         onOpenAdvanced = { showAdvanced = true },
                         onOpenModes = { showModes = true },
-                        onSelectMode = viewModel::selectMode
+                        onSelectMode = viewModel::selectMode,
+                        onToggleVoiceCommands = { viewModel.toggleVoiceCommands() }
                     )
                 }
             }
@@ -382,7 +385,8 @@ private fun CameraBottomBar(
     onToggleAudio: () -> Unit,
     onOpenAdvanced: () -> Unit,
     onOpenModes: () -> Unit,
-    onSelectMode: (CameraMode) -> Unit
+    onSelectMode: (CameraMode) -> Unit,
+    onToggleVoiceCommands: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -440,6 +444,21 @@ private fun CameraBottomBar(
                 enabled = state.state.canCapturePhoto || state.state == CameraState.RECORDING,
                 modifier = Modifier.weight(1f)
             )
+            if (state.voiceCommandsEnabled) {
+                CameraSquareButton(
+                    label = if (state.voiceListening) "Listening" else "Voice",
+                    icon = if (state.voiceListening) Icons.Filled.Mic else Icons.Filled.MicOff,
+                    onClick = onToggleVoiceCommands,
+                    enabled = state.voiceAvailable,
+                    selected = state.voiceListening,
+                    contentDescription = when {
+                        !state.voiceAvailable -> "Voice commands unavailable"
+                        state.voiceListening -> "Stop listening for voice commands"
+                        else -> "Listen for voice commands"
+                    },
+                    size = Dimens.MinimumTouchTarget
+                )
+            }
             CameraSquareButton(
                 label = "More",
                 icon = Icons.Filled.Tune,

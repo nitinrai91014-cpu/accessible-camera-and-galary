@@ -138,7 +138,10 @@ data class CameraUiState(
     val reviewItem: MediaItem? = null,
     val showAdvancedPanel: Boolean = false,
     val supportsPhotoDuringVideo: Boolean = false,
-    val isRecordingPausedAllowed: Boolean = true
+    val isRecordingPausedAllowed: Boolean = true,
+    val voiceCommandsEnabled: Boolean = false,
+    val voiceListening: Boolean = false,
+    val voiceAvailable: Boolean = false
 ) {
     val isFrontCamera: Boolean get() = activeLens?.facing == Facing.FRONT
     val canUseFlash: Boolean get() = activeLens?.hasFlash == true

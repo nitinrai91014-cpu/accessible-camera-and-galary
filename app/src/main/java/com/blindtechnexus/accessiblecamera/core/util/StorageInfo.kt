@@ -15,11 +15,15 @@ import java.io.File
 /** Storage helpers used for low storage warnings and free space checks. */
 object StorageInfo {
 
-    private const val LOW_STORAGE_THRESHOLD_BYTES = 150L * 1024L * 1024L
+    /** Below this, the app warns that space is running out. */
+    const val LOW_STORAGE_THRESHOLD_BYTES = 150L * 1024L * 1024L
+
+    /** Below this, captures are refused so a file is never half written. */
+    const val CRITICAL_BYTES = 30L * 1024L * 1024L
 
     data class Snapshot(val availableBytes: Long, val totalBytes: Long) {
         val isLow: Boolean get() = availableBytes in 0 until LOW_STORAGE_THRESHOLD_BYTES
-        val isCritical: Boolean get() = availableBytes in 0 until (30L * 1024L * 1024L)
+        val isCritical: Boolean get() = availableBytes in 0 until CRITICAL_BYTES
     }
 
     fun snapshot(context: Context): Snapshot {

@@ -22,6 +22,8 @@ import com.blindtechnexus.accessiblecamera.data.camera.CameraFrameAnalyzer
 import com.blindtechnexus.accessiblecamera.data.location.LocationProvider
 import com.blindtechnexus.accessiblecamera.data.media.MediaSaver
 import com.blindtechnexus.accessiblecamera.data.voice.VoiceRepositoryImpl
+import com.blindtechnexus.accessiblecamera.domain.model.VoiceCommand
+import com.blindtechnexus.accessiblecamera.ui.voice.VoiceCommandController
 import com.blindtechnexus.accessiblecamera.di.ApplicationScope
 import com.blindtechnexus.accessiblecamera.domain.model.AnnouncementPriority
 import com.blindtechnexus.accessiblecamera.domain.model.AppSettings
@@ -48,6 +50,7 @@ import com.blindtechnexus.accessiblecamera.domain.model.WhiteBalanceMode
 import com.blindtechnexus.accessiblecamera.domain.repository.CapabilityRepository
 import com.blindtechnexus.accessiblecamera.domain.repository.MediaRepository
 import com.blindtechnexus.accessiblecamera.domain.repository.SettingsRepository
+import com.blindtechnexus.accessiblecamera.domain.usecase.CaptureReadinessUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -85,11 +88,27 @@ class CameraViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val locationProvider: LocationProvider,
     private val voice: VoiceRepositoryImpl,
+    private val voiceCommands: VoiceCommandController,
+    private val captureReadiness: CaptureReadinessUseCase,
     @ApplicationScope private val appScope: CoroutineScope
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CameraUiState())
     val uiState: StateFlow<CameraUiState> = _uiState.asStateFlow()
+
+    /** Voice command availability and listening state, for the explicit listen button. */
+    val voiceCommandState: StateFlow<VoiceCommandController.VoiceCommandUiState> =
+        voiceCommands.state
+
+    private fun mirrorVoiceState() {
+        val voiceState = voiceCommands.state.value
+        _uiState.update {
+            it.copy(
+                voiceAvailable = voiceState.available,
+                voiceListening = voiceState.listening
+            )
+        }
+    }
 
     private val captureInFlight = AtomicBoolean(false)
     private var settings: AppSettings = AppSettings.Defaults
@@ -108,6 +127,10 @@ class CameraViewModel @Inject constructor(
     private var lastGuidanceText: String? = null
 
     init {
+        voiceCommands.attachHandler { command -> handleVoiceCommand(command) }
+        viewModelScope.launch {
+            voiceCommands.state.collect { mirrorVoiceState() }
+        }
         viewModelScope.launch {
             settingsRepository.settings.collect { current ->
                 settings = current
@@ -126,6 +149,7 @@ class CameraViewModel @Inject constructor(
                     audioCues = current.audioCuesEnabled,
                     voiceGuidance = current.voiceGuidanceEnabled
                 )
+                _uiState.update { it.copy(voiceCommandsEnabled = current.voiceCommandsEnabled) }
                 frameAnalyzer.faceDetectionEnabled = current.faceGuidanceEnabled
                 frameAnalyzer.sceneDescriptionEnabled =
                     current.sceneDescriptionInterval != com.blindtechnexus.accessiblecamera.domain.model.SceneDescriptionInterval.OFF
@@ -501,10 +525,20 @@ class CameraViewModel @Inject constructor(
                 cancelCountdown()
                 return
             }
-            !state.state.canCapturePhoto -> {
+        }
+        val decision = captureReadiness.evaluate(
+            state = state.state,
+            captureInFlight = captureInFlight.get(),
+            storage = StorageInfo.snapshot(context),
+            hasCamera = state.capabilities.hasAnyCamera
+        )
+        if (!decision.allowed && decision.reason != CaptureReadinessUseCase.Reason.READY) {
+            if (decision.reason != CaptureReadinessUseCase.Reason.BUSY) {
+                voice.announce(decision.spokenMessage, AnnouncementPriority.HIGH)
+            } else {
                 voice.announce("The camera is busy. Please wait.", AnnouncementPriority.HIGH)
-                return
             }
+            return
         }
         if (state.timer.seconds > 0) {
             startCountdown()
@@ -1323,6 +1357,106 @@ class CameraViewModel @Inject constructor(
         setVideoQuality(options[(index + 1).coerceAtLeast(0) % options.size])
     }
 
+    // region Voice commands
+
+    /**
+     * Starts or stops explicit listening. Returns true when listening started, so the screen
+     * can request the microphone permission first.
+     */
+    fun toggleVoiceCommands(): Boolean {
+        val current = voiceCommands.state.value
+        if (current.listening) {
+            voiceCommands.stopListening()
+            return false
+        }
+        voiceCommands.refreshAvailability()
+        return voiceCommands.startListening()
+    }
+
+    fun cancelVoiceCommand() = voiceCommands.cancelPending()
+
+    /** Maps a recognised command onto the action that is meaningful right now. */
+    private fun handleVoiceCommand(command: VoiceCommand): Boolean {
+        val state = _uiState.value
+        return when (command) {
+            VoiceCommand.TAKE_PHOTO -> {
+                if (state.selectedMode.isVideo) {
+                    toggleRecording()
+                } else {
+                    onShutterPressed()
+                }
+                true
+            }
+            VoiceCommand.START_VIDEO -> {
+                if (state.state == CameraState.RECORDING) {
+                    false
+                } else {
+                    toggleRecording()
+                    true
+                }
+            }
+            VoiceCommand.STOP_VIDEO -> {
+                if (state.state == CameraState.RECORDING || state.state == CameraState.PAUSED) {
+                    stopRecording()
+                    true
+                } else {
+                    false
+                }
+            }
+            VoiceCommand.PAUSE_VIDEO -> {
+                if (state.state == CameraState.RECORDING) {
+                    pauseRecording()
+                    true
+                } else {
+                    false
+                }
+            }
+            VoiceCommand.RESUME_VIDEO -> {
+                if (state.state == CameraState.PAUSED) {
+                    resumeRecording()
+                    true
+                } else {
+                    false
+                }
+            }
+            VoiceCommand.ZOOM_IN -> {
+                zoomIn()
+                true
+            }
+            VoiceCommand.ZOOM_OUT -> {
+                zoomOut()
+                true
+            }
+            VoiceCommand.SWITCH_CAMERA -> {
+                switchCamera()
+                true
+            }
+            VoiceCommand.FLASH -> {
+                cycleFlash()
+                true
+            }
+            VoiceCommand.TIMER -> {
+                cycleTimer()
+                true
+            }
+            VoiceCommand.OPEN_GALLERY,
+            VoiceCommand.OPEN_PHOTO,
+            VoiceCommand.OPEN_SETTINGS,
+            VoiceCommand.NEXT,
+            VoiceCommand.PREVIOUS,
+            VoiceCommand.BACK,
+            VoiceCommand.SELECT,
+            VoiceCommand.DESELECT,
+            VoiceCommand.SHARE,
+            VoiceCommand.PLAY_PAUSE -> false
+            // Delete and confirmation are owned by the controller so a mis-recognition
+            // can never destroy a file without a spoken confirmation.
+            else -> false
+        }
+    }
+
+    // endregion
+
     /** Reads back the current state for volume key and voice command handling. */
     fun speakCurrentState() {
         voice.announce(_uiState.value.previewDescription, AnnouncementPriority.HIGH)
@@ -1341,6 +1475,8 @@ class CameraViewModel @Inject constructor(
         recordingTimerJob?.cancel()
         sceneJob?.cancel()
         burstJob?.cancel()
+        voiceCommands.detachHandler()
+        voiceCommands.stopListening()
         cameraController.release()
     }
 }
