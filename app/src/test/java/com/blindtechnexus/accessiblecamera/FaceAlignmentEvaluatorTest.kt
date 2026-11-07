@@ -51,8 +51,9 @@ class FaceAlignmentEvaluatorTest {
 
     @Test
     fun `centred large face is aligned`() {
+        // Half the frame height, dead centre: comfortably inside every threshold.
         val result = FaceAlignmentEvaluator.evaluate(
-            listOf(face(400, 700, 680, 1180)),
+            listOf(face(300, 480, 780, 1440)),
             frameWidth = 1080,
             frameHeight = 1920
         )
@@ -83,7 +84,7 @@ class FaceAlignmentEvaluatorTest {
     @Test
     fun `turned head asks the user to turn back`() {
         val result = FaceAlignmentEvaluator.evaluate(
-            listOf(face(400, 700, 680, 1180, eulerY = 30f)),
+            listOf(face(300, 480, 780, 1440, eulerY = 30f)),
             frameWidth = 1080,
             frameHeight = 1920
         )
@@ -93,7 +94,7 @@ class FaceAlignmentEvaluatorTest {
     @Test
     fun `tilted head asks the user to straighten up`() {
         val result = FaceAlignmentEvaluator.evaluate(
-            listOf(face(400, 700, 680, 1180, eulerZ = 25f)),
+            listOf(face(300, 480, 780, 1440, eulerZ = 25f)),
             frameWidth = 1080,
             frameHeight = 1920
         )
@@ -104,8 +105,8 @@ class FaceAlignmentEvaluatorTest {
     fun `two faces are reported as multiple`() {
         val result = FaceAlignmentEvaluator.evaluate(
             listOf(
-                face(400, 700, 680, 1180),
-                face(700, 700, 900, 1180)
+                face(300, 480, 780, 1440),
+                face(760, 480, 1040, 1440)
             ),
             frameWidth = 1080,
             frameHeight = 1920
