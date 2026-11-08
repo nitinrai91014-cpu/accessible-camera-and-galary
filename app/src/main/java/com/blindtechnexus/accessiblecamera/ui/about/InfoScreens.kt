@@ -22,14 +22,25 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.blindtechnexus.accessiblecamera.domain.model.CameraCapabilities
+import com.blindtechnexus.accessiblecamera.domain.model.FeatureCatalog
+import com.blindtechnexus.accessiblecamera.domain.model.FeatureSupport
 import com.blindtechnexus.accessiblecamera.domain.model.VoiceCommand
 import com.blindtechnexus.accessiblecamera.ui.components.AccessibleSecondaryButton
 import com.blindtechnexus.accessiblecamera.ui.components.SectionHeading
 import com.blindtechnexus.accessiblecamera.ui.theme.Dimens
 
-/** About screen with credits, licence and privacy summary. */
+/**
+ * About screen: credits, a complete feature guide and the privacy summary.
+ *
+ * Every feature is described in reading order as its own text views: what it is used for, how
+ * to use it, and whether this exact device supports it. The support line comes from the same
+ * capability registry that drives the camera UI, so nothing here is a guess.
+ */
 @Composable
 fun AboutScreen(
+    capabilities: CameraCapabilities,
+    mlKitModelsReady: Boolean,
+    mlKitModelsInstalling: Boolean,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -62,6 +73,50 @@ fun AboutScreen(
             text = "Developed by Sujan Rai of the Blind Tech Nexus team.",
             style = MaterialTheme.typography.bodyMedium
         )
+
+        Spacer(Modifier.height(Dimens.SectionSpacing))
+        SectionHeading(
+            text = "Feature guide",
+            supporting = "Every feature, one after another: what it is for, how to use it, and whether this device supports it."
+        )
+        val groups = FeatureCatalog.build(
+            capabilities = capabilities,
+            mlKitModelsReady = mlKitModelsReady,
+            mlKitModelsInstalling = mlKitModelsInstalling
+        )
+        groups.forEach { group ->
+            Text(
+                text = group.title,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier
+                    .padding(top = Dimens.ItemSpacing, bottom = 4.dp)
+                    .semantics { heading() }
+            )
+            group.features.forEach { feature ->
+                Text(
+                    text = feature.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(top = Dimens.SmallSpacing)
+                )
+                Text(
+                    text = "What it is for: ${feature.purpose}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "How to use it: ${feature.howToUse}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = feature.support.statusText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = when (feature.support) {
+                        is FeatureSupport.Supported -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+        }
+
         Spacer(Modifier.height(Dimens.SectionSpacing))
         SectionHeading(text = "Privacy")
         Text(

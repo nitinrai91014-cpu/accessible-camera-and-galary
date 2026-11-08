@@ -10,11 +10,14 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.blindtechnexus.accessiblecamera.data.camera.CameraCapabilityDetector
+import com.blindtechnexus.accessiblecamera.data.mlkit.MlKitModelProvisioner
+import com.blindtechnexus.accessiblecamera.data.mlkit.MlKitModelState
 import com.blindtechnexus.accessiblecamera.data.voice.OnDeviceSpeechRecognizer
 import com.blindtechnexus.accessiblecamera.data.voice.VoiceRepositoryImpl
 import com.blindtechnexus.accessiblecamera.domain.model.AnnouncementPriority
 import com.blindtechnexus.accessiblecamera.domain.model.AppSettings
 import com.blindtechnexus.accessiblecamera.domain.model.CameraCapabilities
+import com.blindtechnexus.accessiblecamera.domain.model.FaceDetectionInterval
 import com.blindtechnexus.accessiblecamera.domain.model.FontScaleOption
 import com.blindtechnexus.accessiblecamera.domain.model.GalleryLayout
 import com.blindtechnexus.accessiblecamera.domain.model.SaveLocation
@@ -39,6 +42,7 @@ data class SettingsUiState(
     val speechAvailable: Boolean = false,
     val voiceCommandsAvailable: Boolean = false,
     val onDeviceRecognition: Boolean = false,
+    val mlKitState: MlKitModelState = MlKitModelState.NotInstalled,
     val message: String? = null,
     val showResetConfirmation: Boolean = false
 )
@@ -53,6 +57,7 @@ class SettingsViewModel @Inject constructor(
     private val capabilityDetector: CameraCapabilityDetector,
     private val voice: VoiceRepositoryImpl,
     private val speechRecognizer: OnDeviceSpeechRecognizer,
+    private val mlKitModelProvisioner: MlKitModelProvisioner,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -79,6 +84,11 @@ class SettingsViewModel @Inject constructor(
                 speechAvailable = available,
                 voiceCommandsAvailable = available
             )
+        }
+        viewModelScope.launch {
+            mlKitModelProvisioner.state.collect { modelState ->
+                _uiState.value = _uiState.value.copy(mlKitState = modelState)
+            }
         }
     }
 
@@ -176,8 +186,32 @@ class SettingsViewModel @Inject constructor(
         it.copy(watermarkText = text.take(60))
     }
 
-    fun faceGuidance(enabled: Boolean) = update("Face guidance ${if (enabled) "on" else "off"}") {
-        it.copy(faceGuidanceEnabled = enabled)
+    fun cycleFaceInterval() = update(
+        "Face detection ${settings.value.faceDetectionInterval.description}"
+    ) { it.copy(faceDetectionInterval = it.faceDetectionInterval.next) }
+
+    fun setFaceInterval(interval: FaceDetectionInterval) =
+        update("Face detection ${interval.description}") { it.copy(faceDetectionInterval = interval) }
+
+    fun barcodeScanning(enabled: Boolean) =
+        update("Barcode scanning ${if (enabled) "on" else "off"}") {
+            it.copy(barcodeScanningEnabled = enabled)
+        }
+
+    fun shutterSound(enabled: Boolean) =
+        update("Shutter sound ${if (enabled) "on" else "off"}") {
+            it.copy(shutterSoundEnabled = enabled)
+        }
+
+    /** Downloads (from the bundled assets) and prepares the on-device ML Kit models. */
+    fun installMlKitModels() {
+        voice.announce("Preparing on-device intelligence models.", AnnouncementPriority.NORMAL)
+        mlKitModelProvisioner.install()
+    }
+
+    fun cancelMlKitInstall() {
+        mlKitModelProvisioner.cancel()
+        voice.announce("Model installation cancelled.", AnnouncementPriority.NORMAL)
     }
 
     fun cycleSceneInterval() = update(

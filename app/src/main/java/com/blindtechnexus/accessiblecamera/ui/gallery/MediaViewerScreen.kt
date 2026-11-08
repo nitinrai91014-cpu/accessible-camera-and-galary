@@ -100,6 +100,10 @@ fun MediaViewerScreen(
     var positionMillis by remember { mutableFloatStateOf(0f) }
     var durationMillis by remember { mutableFloatStateOf(0f) }
 
+    // The trash flag can arrive from navigation or from the item itself when it was opened
+    // through item details, so both are honoured.
+    val inTrash = fromTrash || currentItem.inTrash
+
     // One player instance for the whole viewer session so switching items is cheap.
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
@@ -200,7 +204,7 @@ fun MediaViewerScreen(
             )
             AccessibleIconButton(
                 icon = Icons.Filled.Delete,
-                contentDescription = if (fromTrash) "Delete permanently" else "Move to recently deleted",
+                contentDescription = if (inTrash) "Delete permanently" else "Move to recently deleted",
                 onClick = { showDeleteDialog = true },
                 tint = Color.White
             )
@@ -371,27 +375,35 @@ fun MediaViewerScreen(
         MediaDetailsSheet(
             details = details,
             onDismiss = viewModel::closeDetails,
-            onDeleteTrashed = { showDeleteDialog = true },
+            onDeleteTrashed = {
+                // Restore first, then leave the trash view.
+                viewModel.restoreFromTrash(listOf(details.item))
+                viewModel.closeDetails()
+                onBack()
+            },
             onDelete = { showDeleteDialog = true }
         )
     }
 
     if (showDeleteDialog) {
+        val trashed = inTrash || state.details?.item?.inTrash == true
         AccessibleConfirmDialog(
-            title = if (fromTrash) "Delete permanently?" else "Move to recently deleted?",
-            message = if (fromTrash) {
-                "This permanently deletes ${currentItem.displayName}."
+            title = if (trashed) "Delete Selected Items Permanently" else "Move to recently deleted?",
+            message = if (trashed) {
+                "Delete ${currentItem.displayName} permanently? This cannot be undone."
             } else {
                 "This moves ${currentItem.displayName} to recently deleted. You can restore it."
             },
-            confirmLabel = if (fromTrash) "Delete permanently" else "Move to trash",
+            confirmLabel = if (trashed) "Delete" else "Move to trash",
+            supporting = if (trashed) "Cannot be undone." else null,
             onConfirm = {
                 showDeleteDialog = false
-                if (fromTrash) {
+                if (trashed) {
                     viewModel.deletePermanently(listOf(currentItem))
                 } else {
                     viewModel.moveToTrash(listOf(currentItem))
                 }
+                viewModel.closeDetails()
                 onBack()
             },
             onDismiss = { showDeleteDialog = false }

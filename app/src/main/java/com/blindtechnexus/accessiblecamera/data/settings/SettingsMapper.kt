@@ -9,6 +9,7 @@ package com.blindtechnexus.accessiblecamera.data.settings
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import com.blindtechnexus.accessiblecamera.domain.model.AppSettings
+import com.blindtechnexus.accessiblecamera.domain.model.FaceDetectionInterval
 import com.blindtechnexus.accessiblecamera.domain.model.FontScaleOption
 import com.blindtechnexus.accessiblecamera.domain.model.GalleryLayout
 import com.blindtechnexus.accessiblecamera.domain.model.SaveLocation
@@ -45,8 +46,10 @@ internal object SettingsMapper {
             geotaggingEnabled = preferences[SettingsKeys.GEOTAGGING] ?: defaults.geotaggingEnabled,
             watermarkEnabled = preferences[SettingsKeys.WATERMARK] ?: defaults.watermarkEnabled,
             watermarkText = preferences[SettingsKeys.WATERMARK_TEXT] ?: defaults.watermarkText,
-            faceGuidanceEnabled = preferences[SettingsKeys.FACE_GUIDANCE] ?: defaults.faceGuidanceEnabled,
+            faceDetectionInterval = storedFaceInterval(preferences, defaults.faceDetectionInterval),
             sceneDescriptionInterval = enumOr(preferences[SettingsKeys.SCENE_INTERVAL], defaults.sceneDescriptionInterval),
+            barcodeScanningEnabled = preferences[SettingsKeys.BARCODE_SCANNING] ?: defaults.barcodeScanningEnabled,
+            shutterSoundEnabled = preferences[SettingsKeys.SHUTTER_SOUND] ?: defaults.shutterSoundEnabled,
             voiceCommandsEnabled = preferences[SettingsKeys.VOICE_COMMANDS] ?: defaults.voiceCommandsEnabled,
             volumeKeyShutterEnabled = preferences[SettingsKeys.VOLUME_KEY_SHUTTER] ?: defaults.volumeKeyShutterEnabled,
             reviewAfterCapture = preferences[SettingsKeys.REVIEW_AFTER_CAPTURE] ?: defaults.reviewAfterCapture,
@@ -82,8 +85,11 @@ fun MutablePreferences.writeAll(settings: AppSettings) {
     this[SettingsKeys.GEOTAGGING] = settings.geotaggingEnabled
     this[SettingsKeys.WATERMARK] = settings.watermarkEnabled
     this[SettingsKeys.WATERMARK_TEXT] = settings.watermarkText
-    this[SettingsKeys.FACE_GUIDANCE] = settings.faceGuidanceEnabled
+    this[SettingsKeys.FACE_INTERVAL] = settings.faceDetectionInterval.name
+    this[SettingsKeys.FACE_GUIDANCE] = settings.faceDetectionInterval.enabled
     this[SettingsKeys.SCENE_INTERVAL] = settings.sceneDescriptionInterval.name
+    this[SettingsKeys.BARCODE_SCANNING] = settings.barcodeScanningEnabled
+    this[SettingsKeys.SHUTTER_SOUND] = settings.shutterSoundEnabled
     this[SettingsKeys.VOICE_COMMANDS] = settings.voiceCommandsEnabled
     this[SettingsKeys.VOLUME_KEY_SHUTTER] = settings.volumeKeyShutterEnabled
     this[SettingsKeys.REVIEW_AFTER_CAPTURE] = settings.reviewAfterCapture
@@ -96,3 +102,23 @@ fun MutablePreferences.writeAll(settings: AppSettings) {
 
 private inline fun <reified T : Enum<T>> enumOr(name: String?, fallback: T): T =
     if (name == null) fallback else runCatching { enumValueOf<T>(name) }.getOrDefault(fallback)
+
+/**
+ * Face detection interval with a migration path: older installs only stored the boolean
+ * face guidance switch, so a switched-on device keeps detecting every three seconds.
+ */
+private fun storedFaceInterval(
+    preferences: Preferences,
+    fallback: FaceDetectionInterval
+): FaceDetectionInterval {
+    val stored = preferences[SettingsKeys.FACE_INTERVAL]
+    if (stored != null) {
+        return runCatching { FaceDetectionInterval.valueOf(stored) }.getOrDefault(fallback)
+    }
+    val legacyEnabled = preferences[SettingsKeys.FACE_GUIDANCE]
+    return when (legacyEnabled) {
+        null -> fallback
+        false -> FaceDetectionInterval.OFF
+        true -> FaceDetectionInterval.THREE_SECONDS
+    }
+}

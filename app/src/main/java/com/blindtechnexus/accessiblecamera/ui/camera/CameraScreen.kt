@@ -7,7 +7,9 @@
 package com.blindtechnexus.accessiblecamera.ui.camera
 
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +27,7 @@ import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
@@ -33,11 +36,15 @@ import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Cameraswitch
 import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,9 +54,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -59,6 +68,8 @@ import com.blindtechnexus.accessiblecamera.domain.model.CameraState
 import com.blindtechnexus.accessiblecamera.domain.model.MediaItem
 import com.blindtechnexus.accessiblecamera.ui.components.AccessibleBanner
 import com.blindtechnexus.accessiblecamera.ui.components.MediaThumbnail
+import com.blindtechnexus.accessiblecamera.ui.components.MlKitDownloadProgressDialog
+import com.blindtechnexus.accessiblecamera.ui.components.MlKitDownloadRequiredDialog
 import com.blindtechnexus.accessiblecamera.ui.components.PermissionPanel
 import com.blindtechnexus.accessiblecamera.ui.theme.AppColors
 import com.blindtechnexus.accessiblecamera.ui.theme.Dimens
@@ -87,8 +98,16 @@ fun CameraScreen(
     var lastAnnouncedState by remember { mutableStateOf<String?>(null) }
     var showAdvanced by remember { mutableStateOf(false) }
     var showModes by remember { mutableStateOf(false) }
+    var showFaceOptions by remember { mutableStateOf(false) }
+    var showSceneOptions by remember { mutableStateOf(false) }
 
     LaunchedEffect(isVideoTab) { viewModel.alignModeWithTab(isVideoTab) }
+
+    // The preview is released when the tab is left, so returning must bind again.
+    LifecycleResumeEffect(Unit) {
+        viewModel.onScreenResumed()
+        onPauseOrDispose { }
+    }
 
     LaunchedEffect(previewView, state.permissionState, state.activeLens?.id) {
         val view = previewView ?: return@LaunchedEffect
@@ -204,7 +223,12 @@ fun CameraScreen(
                         onOpenAdvanced = { showAdvanced = true },
                         onOpenModes = { showModes = true },
                         onSelectMode = viewModel::selectMode,
-                        onToggleVoiceCommands = { viewModel.toggleVoiceCommands() }
+                        onToggleVoiceCommands = { viewModel.toggleVoiceCommands() },
+                        onToggleTorch = viewModel::setTorch,
+                        onOpenFaceOptions = { showFaceOptions = true },
+                        onOpenSceneOptions = { showSceneOptions = true },
+                        onDescribeNow = viewModel::describeSceneNow,
+                        onScanBarcode = viewModel::scanBarcodeNow
                     )
                 }
             }
@@ -265,6 +289,69 @@ fun CameraScreen(
             announce = announce
         )
     }
+
+    if (showFaceOptions) {
+        FaceDetectionSheet(
+            state = state,
+            onSelect = {
+                viewModel.setFaceDetectionInterval(it)
+                showFaceOptions = false
+            },
+            onInstallModels = {
+                showFaceOptions = false
+                viewModel.showMlKitPrompt()
+            },
+            onDismiss = { showFaceOptions = false },
+            announce = announce
+        )
+    }
+
+    if (showSceneOptions) {
+        SceneDescriptionSheet(
+            state = state,
+            onSelect = {
+                viewModel.setSceneDescriptionInterval(it)
+                showSceneOptions = false
+            },
+            onDescribeNow = {
+                viewModel.describeSceneNow()
+                showSceneOptions = false
+            },
+            onInstallModels = {
+                showSceneOptions = false
+                viewModel.showMlKitPrompt()
+            },
+            onDismiss = { showSceneOptions = false },
+            announce = announce
+        )
+    }
+
+    if (state.showMlKitDownloadPrompt && !state.mlKitInstalling) {
+        MlKitDownloadRequiredDialog(
+            onDownload = viewModel::installMlKitModels,
+            onCancel = viewModel::dismissMlKitPrompt
+        )
+    }
+
+    if (state.mlKitInstalling) {
+        MlKitDownloadProgressDialog(
+            progress = state.mlKitProgress,
+            message = state.mlKitInstallMessage.ifBlank { "Installing on-device models" },
+            onCancel = viewModel::cancelMlKitInstall
+        )
+    }
+
+    state.mlKitFailure?.let { reason ->
+        AccessibleBanner(
+            text = "The on-device models could not be installed. $reason",
+            isError = true,
+            actionLabel = "Try again",
+            onAction = viewModel::showMlKitPrompt,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Dimens.ItemSpacing)
+        )
+    }
 }
 
 /** Top row: lens and gallery on the left, quick toggles on the right. */
@@ -307,12 +394,15 @@ private fun CameraTopBar(
                     size = Dimens.MinimumTouchTarget
                 )
             }
+            // The label always names the camera the button switches to, so it can never be
+            // mistaken for the current lens.
             CameraSquareButton(
-                label = "Flip",
+                label = state.cameraSwitchShortLabel,
                 icon = Icons.Outlined.Cameraswitch,
                 onClick = onSwitchCamera,
-                enabled = state.availableLenses.size > 1,
-                contentDescription = "Switch camera",
+                enabled = state.capabilities.let { it.hasFrontCamera && it.hasBackCamera } ||
+                    state.availableLenses.size > 1,
+                contentDescription = state.cameraSwitchLabel,
                 size = Dimens.MinimumTouchTarget
             )
             CameraSquareButton(
@@ -386,7 +476,12 @@ private fun CameraBottomBar(
     onOpenAdvanced: () -> Unit,
     onOpenModes: () -> Unit,
     onSelectMode: (CameraMode) -> Unit,
-    onToggleVoiceCommands: () -> Unit
+    onToggleVoiceCommands: () -> Unit,
+    onToggleTorch: (Boolean) -> Unit,
+    onOpenFaceOptions: () -> Unit,
+    onOpenSceneOptions: () -> Unit,
+    onDescribeNow: () -> Unit,
+    onScanBarcode: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -409,6 +504,59 @@ private fun CameraBottomBar(
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
             )
+        }
+
+        if (!isVideoTab) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (state.canUseTorch) {
+                    CameraFlashlightSwitch(
+                        checked = state.torchEnabled,
+                        onCheckedChange = onToggleTorch
+                    )
+                }
+                if (state.capabilities.supportsFaceDetection) {
+                    CameraSquareButton(
+                        label = "Face",
+                        icon = Icons.Outlined.Face,
+                        onClick = onOpenFaceOptions,
+                        selected = state.faceGuidanceEnabled,
+                        valueText = state.faceDetectionInterval.label,
+                        contentDescription = "Face detection options, ${state.faceDetectionInterval.label}",
+                        size = Dimens.MinimumTouchTarget
+                    )
+                }
+                CameraSquareButton(
+                    label = "Describe",
+                    icon = Icons.Outlined.Face,
+                    onClick = onOpenSceneOptions,
+                    selected = state.sceneDescriptionEnabled,
+                    valueText = state.sceneDescriptionInterval.label,
+                    contentDescription = "Describe scene options, ${state.sceneDescriptionInterval.label}",
+                    size = Dimens.MinimumTouchTarget
+                )
+                if (state.capabilities.supportsBarcodeScanning) {
+                    CameraSquareButton(
+                        label = "Barcode",
+                        icon = Icons.Filled.Search,
+                        onClick = onScanBarcode,
+                        contentDescription = "Scan barcode now",
+                        size = Dimens.MinimumTouchTarget
+                    )
+                }
+                CameraSquareButton(
+                    label = "Read now",
+                    icon = Icons.Filled.VolumeUp,
+                    onClick = onDescribeNow,
+                    contentDescription = "Describe scene now",
+                    size = Dimens.MinimumTouchTarget
+                )
+            }
         }
 
         Row(
@@ -504,8 +652,8 @@ private fun CameraBottomBar(
                 CameraSquareButton(
                     label = "Face",
                     icon = Icons.Outlined.Face,
-                    onClick = onOpenAdvanced,
-                    contentDescription = "Face guidance and focus options",
+                    onClick = onOpenFaceOptions,
+                    contentDescription = "Face detection options, ${state.faceDetectionInterval.label}",
                     selected = state.faceGuidanceEnabled,
                     size = Dimens.MinimumTouchTarget
                 )
@@ -521,6 +669,53 @@ private fun CameraBottomBar(
                     .padding(top = 6.dp)
                     .semantics { liveRegion = LiveRegionMode.Polite }
             )
+        }
+    }
+}
+
+/**
+ * Dedicated flashlight switch for photo mode.
+ *
+ * It is a real toggle with a switch role, so a screen reader announces "Flashlight, switch,
+ * on or off" and a switch access user can change it without hunting for the flash cycle.
+ */
+@Composable
+private fun CameraFlashlightSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.semantics(mergeDescendants = true) {
+            contentDescription = "Flashlight"
+            stateDescription = if (checked) "On" else "Off"
+        },
+        shape = MaterialTheme.shapes.medium,
+        color = AppColors.CameraChrome,
+        contentColor = Color.White,
+        border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.85f))
+    ) {
+        Row(
+            modifier = Modifier
+                .toggleable(
+                    value = checked,
+                    role = Role.Switch,
+                    onValueChange = onCheckedChange
+                )
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = if (checked) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
+                contentDescription = null,
+                modifier = Modifier.height(Dimens.IconSize)
+            )
+            Text(
+                text = "Flashlight",
+                style = MaterialTheme.typography.labelSmall
+            )
+            Switch(checked = checked, onCheckedChange = null)
         }
     }
 }
