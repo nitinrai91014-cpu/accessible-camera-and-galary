@@ -34,6 +34,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.blindtechnexus.accessiblecamera.core.util.IntentLauncher
 import com.blindtechnexus.accessiblecamera.data.media.MediaPermissionEvaluator
+import com.blindtechnexus.accessiblecamera.data.mlkit.MlKitModelState
 import com.blindtechnexus.accessiblecamera.domain.model.AnnouncementPriority
 import com.blindtechnexus.accessiblecamera.domain.model.AudioCue
 import com.blindtechnexus.accessiblecamera.domain.model.HapticCue
@@ -215,7 +216,8 @@ fun AccessibleCameraNavHost(
                     GalleryScreen(
                         onOpenItem = { item: MediaItem, index: Int ->
                             appViewModel.selectItem(item)
-                            navController.navigate(Routes.viewer(item.id, index))
+                            // Carry the trash flag so the viewer offers Delete permanently.
+                            navController.navigate(Routes.viewer(item.id, index, item.inTrash))
                         },
                         onRequestMediaPermission = requestGalleryPermission,
                         onOpenSettings = { IntentLauncher.openAppSettings(context) },
@@ -282,7 +284,14 @@ fun AccessibleCameraNavHost(
             }
 
             composable(Routes.ABOUT) {
-                AboutScreen(onBack = { navController.popBackStack() })
+                val capabilities by appViewModel.capabilities.collectAsStateWithLifecycle()
+                val modelState by appViewModel.mlKitState.collectAsStateWithLifecycle()
+                AboutScreen(
+                    capabilities = capabilities,
+                    mlKitModelsReady = modelState is MlKitModelState.Installed,
+                    mlKitModelsInstalling = modelState is MlKitModelState.Installing,
+                    onBack = { navController.popBackStack() }
+                )
             }
 
             composable(Routes.CAPABILITIES) {

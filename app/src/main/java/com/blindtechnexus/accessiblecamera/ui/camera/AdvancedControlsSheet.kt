@@ -204,11 +204,27 @@ fun AdvancedControlsSheet(
             onCheckedChange = { viewModel.toggleLevel() },
             description = "Shows a horizontal guide so photos are level."
         )
+        AccessibleCycleRow(
+            label = "Face detection",
+            value = state.faceDetectionInterval.label,
+            onActivate = {
+                viewModel.setFaceDetectionInterval(state.faceDetectionInterval.next)
+            },
+            description = "Speaks how to align a face. Off, or check every 2, 3, 5 or 7 seconds."
+        )
+        AccessibleCycleRow(
+            label = "Describe scene",
+            value = state.sceneDescriptionInterval.label,
+            onActivate = {
+                viewModel.setSceneDescriptionInterval(state.sceneDescriptionInterval.next)
+            },
+            description = "Names what the camera sees on the chosen interval. Three seconds is a good default."
+        )
         AccessibleSwitchRow(
-            label = "Face guidance",
-            checked = state.faceGuidanceEnabled,
-            onCheckedChange = { viewModel.toggleFaceGuidance() },
-            description = "Speaks how to align a face in the frame."
+            label = "Read barcodes in descriptions",
+            checked = state.barcodeScanningEnabled,
+            onCheckedChange = { viewModel.setBarcodeScanningEnabled(it) },
+            description = "Adds barcode and QR values to scene descriptions."
         )
 
         if (state.capabilities.isModeAvailable(CameraMode.VIDEO)) {

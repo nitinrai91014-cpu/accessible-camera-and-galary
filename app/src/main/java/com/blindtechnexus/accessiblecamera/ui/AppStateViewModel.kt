@@ -8,6 +8,8 @@ package com.blindtechnexus.accessiblecamera.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.blindtechnexus.accessiblecamera.data.mlkit.MlKitModelProvisioner
+import com.blindtechnexus.accessiblecamera.data.mlkit.MlKitModelState
 import com.blindtechnexus.accessiblecamera.data.voice.VoiceRepositoryImpl
 import com.blindtechnexus.accessiblecamera.domain.model.AnnouncementPriority
 import com.blindtechnexus.accessiblecamera.domain.model.AppSettings
@@ -38,7 +40,8 @@ class AppStateViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val voiceRepository: VoiceRepositoryImpl,
     private val mediaRepository: MediaRepository,
-    capabilityRepository: CapabilityRepository
+    capabilityRepository: CapabilityRepository,
+    mlKitModelProvisioner: MlKitModelProvisioner
 ) : ViewModel() {
 
     val settings: StateFlow<AppSettings> = settingsRepository.settings
@@ -53,6 +56,9 @@ class AppStateViewModel @Inject constructor(
 
     val voiceReady: StateFlow<Boolean> = voiceRepository.isEngineReady
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** On-device ML Kit model installation state, used by the About feature guide. */
+    val mlKitState: StateFlow<MlKitModelState> = mlKitModelProvisioner.state
 
     private val _selectedItem = MutableStateFlow<MediaItem?>(null)
     val selectedItem: StateFlow<MediaItem?> = _selectedItem.asStateFlow()

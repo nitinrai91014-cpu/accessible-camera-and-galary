@@ -92,14 +92,85 @@ class CameraCapabilityDetector @Inject constructor(
             notes = listOf("Camera provider unavailable")
         )
         val infos = cameraProvider.availableCameraInfos
-        if (infos.isEmpty()) return CameraCapabilities.Empty
+        if (infos.isEmpty()) return CameraCapabilities.Empty.copy(
+            notes = listOf("Android reported no camera devices")
+        )
 
+        // Reading full Camera2 characteristics can fail on a few vendor implementations,
+        // especially for physical sub-cameras. A camera that CameraX can see must never be
+        // reported as missing, so every failure falls back to the information CameraX itself
+        // exposes for the lens.
         val rawLenses = infos.mapNotNull { info ->
-            runCatching { reader.read(info) }.getOrNull()
+            runCatching { reader.read(info) }.getOrElse { error ->
+                Log.w(TAG, "Camera2 characteristics unavailable, using CameraX fallback", error)
+                runCatching { fallbackLens(info) }.getOrNull()
+            }
         }
-        if (rawLenses.isEmpty()) return CameraCapabilities.Empty
+        if (rawLenses.isEmpty()) {
+            // Even if no lens metadata can be read, CameraX can still bind these cameras.
+            // Report them with conservative defaults instead of claiming there is no camera.
+            val safeLenses = infos.mapNotNull { info -> runCatching { fallbackLens(info) }.getOrNull() }
+            if (safeLenses.isEmpty()) return CameraCapabilities.Empty.copy(
+                notes = listOf("Camera devices were found but could not be identified")
+            )
+            return capabilitiesFor(infos, safeLenses, cameraProvider)
+        }
 
-        val lenses = reader.classify(rawLenses)
+        val lenses = runCatching { reader.classify(rawLenses) }.getOrDefault(rawLenses)
+        return capabilitiesFor(infos, lenses, cameraProvider)
+    }
+
+    /**
+     * Minimal lens description built only from what CameraX reports, used when the deeper
+     * Camera2 interop read fails.
+     */
+    private fun fallbackLens(info: androidx.camera.core.CameraInfo): LensInfo {
+        val facing = when (info.lensFacing) {
+            CameraSelector.LENS_FACING_FRONT -> Facing.FRONT
+            CameraSelector.LENS_FACING_BACK -> Facing.BACK
+            else -> Facing.EXTERNAL
+        }
+        val zoom = info.zoomState.value
+        return LensInfo(
+            id = runCatching {
+                androidx.camera.camera2.interop.Camera2CameraInfo.from(info).cameraId
+            }.getOrDefault("camera-${info.hashCode()}"),
+            type = if (facing == Facing.FRONT) {
+                com.blindtechnexus.accessiblecamera.domain.model.LensType.FRONT
+            } else {
+                com.blindtechnexus.accessiblecamera.domain.model.LensType.WIDE
+            },
+            facing = facing,
+            zoomMin = zoom?.minZoomRatio ?: 1f,
+            zoomMax = zoom?.maxZoomRatio ?: 1f,
+            focalLengthMm = null,
+            hasFlash = runCatching { info.hasFlashUnit() }.getOrDefault(false),
+            hasAutofocus = false,
+            maxResolutionWidth = 0,
+            maxResolutionHeight = 0,
+            supportsRaw = false,
+            supportsManualIso = false,
+            isoRange = null,
+            exposureTimeRangeNanos = null,
+            supportsManualFocus = false,
+            supportsWhiteBalanceControl = false,
+            supportsAeLock = false,
+            supportsAfLock = false,
+            supportsAwbLock = false,
+            supportsOpticalStabilization = false,
+            supportsVideoStabilization = false,
+            supportsHdrVideo = false,
+            maxVideoFrameRate = 30,
+            hardwareLevel = "Unknown"
+        )
+    }
+
+    /** Builds the capability registry from an already resolved list of lenses. */
+    private suspend fun capabilitiesFor(
+        infos: List<androidx.camera.core.CameraInfo>,
+        lenses: List<LensInfo>,
+        cameraProvider: ProcessCameraProvider
+    ): CameraCapabilities {
         val backLenses = lenses.filter { it.facing == Facing.BACK }
         val frontLenses = lenses.filter { it.facing == Facing.FRONT }
         val primaryBack = backLenses.firstOrNull { it.type != com.blindtechnexus.accessiblecamera.domain.model.LensType.ULTRAWIDE }
@@ -149,7 +220,11 @@ class CameraCapabilityDetector @Inject constructor(
 
         // Video capability, qualities and frame rates.
         val primaryInfo = primaryBack?.let { lens ->
-            infos.firstOrNull { androidx.camera.camera2.interop.Camera2CameraInfo.from(it).cameraId == lens.id }
+            infos.firstOrNull { info ->
+                runCatching {
+                    androidx.camera.camera2.interop.Camera2CameraInfo.from(info).cameraId == lens.id
+                }.getOrDefault(false)
+            }
         }
         val videoCapabilities: androidx.camera.video.VideoCapabilities? = if (primaryInfo != null) {
             runCatching { Recorder.getVideoCapabilities(primaryInfo) }.getOrNull()
@@ -243,7 +318,8 @@ class CameraCapabilityDetector @Inject constructor(
         notes += "Hardware level: ${primaryBack?.hardwareLevel ?: "Unknown"}."
 
         return CameraCapabilities(
-            hasAnyCamera = lenses.isNotEmpty(),
+            // CameraX can bind any of these lenses, so the device definitely has a camera.
+            hasAnyCamera = lenses.isNotEmpty() && infos.isNotEmpty(),
             lenses = lenses,
             supportedModes = supportedModes,
             modeUnavailableReasons = reasons,

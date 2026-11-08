@@ -89,11 +89,28 @@ fun CameraPreview(
         }
         FaceGuidanceBadge(
             guidance = state.faceGuidance,
-            enabled = state.faceGuidanceEnabled,
+            enabled = state.faceGuidanceEnabled && state.mlKitModelsReady,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = Dimens.SectionSpacing)
         )
+        // The newest scene description stays visible so a sighted helper can read it too.
+        state.sceneDescription?.let { description ->
+            StatusPill(
+                text = "Scene: $description",
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = Dimens.SectionSpacing + 44.dp)
+            )
+        }
+        state.lastBarcode?.let { barcode ->
+            StatusPill(
+                text = barcode,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = Dimens.SectionSpacing + 88.dp)
+            )
+        }
         if (state.recordingPaused) {
             StatusPill(
                 text = "Recording paused",

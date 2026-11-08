@@ -196,6 +196,7 @@ fun AlbumSheet(
     state: GalleryUiState,
     onDismiss: () -> Unit,
     onSelectAlbum: (Album?) -> Unit,
+    onShowTrash: () -> Unit,
     onEmptyTrash: () -> Unit,
     announce: (String) -> Unit
 ) {
@@ -225,21 +226,24 @@ fun AlbumSheet(
         }
         SectionHeading(text = "Recently deleted")
         Text(
-            text = "${state.trashedCount} items in recently deleted.",
+            text = if (state.trashedCount == 0) {
+                "Recently deleted is empty."
+            } else {
+                "${state.trashedCount} items in recently deleted. Open the trash to restore or delete them."
+            },
             style = MaterialTheme.typography.bodyMedium
         )
         AccessibleSecondaryButton(
-            text = "Show recently deleted",
-            onClick = {
-                onDismiss()
-                announce("Opening recently deleted")
-            }
+            text = "Open recently deleted",
+            onClick = onShowTrash
         )
-        AccessibleSecondaryButton(
-            text = "Empty recently deleted permanently",
-            onClick = onEmptyTrash,
-            supportingText = "Requires confirmation. This cannot be undone."
-        )
+        if (state.trashedCount > 0) {
+            AccessibleSecondaryButton(
+                text = "Empty recently deleted permanently",
+                onClick = onEmptyTrash,
+                supportingText = "Asks for confirmation first. This cannot be undone."
+            )
+        }
     }
 }
 

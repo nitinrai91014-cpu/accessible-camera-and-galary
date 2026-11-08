@@ -43,14 +43,56 @@ enum class SaveLocation(val label: String, val relativePath: String) {
     val next: SaveLocation get() = entries[(ordinal + 1) % entries.size]
 }
 
+/**
+ * How often ML Kit face detection runs on the live preview frame.
+ *
+ * The interval matters because a face keeps moving: checking every couple of seconds gives
+ * useful alignment hints without burning battery on every single frame.
+ */
+enum class FaceDetectionInterval(val label: String, val seconds: Int) {
+    OFF("Off", 0),
+    TWO_SECONDS("Every 2 seconds", 2),
+    THREE_SECONDS("Every 3 seconds", 3),
+    FIVE_SECONDS("Every 5 seconds", 5),
+    SEVEN_SECONDS("Every 7 seconds", 7);
+
+    val next: FaceDetectionInterval get() = entries[(ordinal + 1) % entries.size]
+
+    val enabled: Boolean get() = this != OFF
+
+    /** Spoken explanation used by the camera options sheet. */
+    val description: String
+        get() = when (this) {
+            OFF -> "Face alignment guidance is off."
+            else -> "Checks face alignment every $seconds seconds."
+        }
+
+    companion object {
+        fun fromSeconds(seconds: Int): FaceDetectionInterval =
+            entries.firstOrNull { it.seconds == seconds && it != OFF } ?: THREE_SECONDS
+    }
+}
+
+/** How often the camera describes the scene out loud. */
 enum class SceneDescriptionInterval(val label: String, val seconds: Int) {
     OFF("Off", 0),
+    TWO_SECONDS("Every 2 seconds", 2),
+    THREE_SECONDS("Every 3 seconds", 3),
     FIVE_SECONDS("Every 5 seconds", 5),
+    SEVEN_SECONDS("Every 7 seconds", 7),
     TEN_SECONDS("Every 10 seconds", 10),
     TWENTY_SECONDS("Every 20 seconds", 20),
     THIRTY_SECONDS("Every 30 seconds", 30);
 
     val next: SceneDescriptionInterval get() = entries[(ordinal + 1) % entries.size]
+
+    val enabled: Boolean get() = this != OFF
+
+    val description: String
+        get() = when (this) {
+            OFF -> "Scene description is off."
+            else -> "Describes what the camera sees every $seconds seconds."
+        }
 }
 
 enum class TimerDuration(val label: String, val seconds: Int) {
@@ -83,8 +125,12 @@ data class AppSettings(
     val geotaggingEnabled: Boolean = false,
     val watermarkEnabled: Boolean = false,
     val watermarkText: String = "Accessible Camera",
-    val faceGuidanceEnabled: Boolean = true,
+    val faceDetectionInterval: FaceDetectionInterval = FaceDetectionInterval.THREE_SECONDS,
     val sceneDescriptionInterval: SceneDescriptionInterval = SceneDescriptionInterval.OFF,
+    /** Read barcodes and QR codes as part of scene descriptions. */
+    val barcodeScanningEnabled: Boolean = true,
+    /** Play the Android system shutter and recording sounds on capture. */
+    val shutterSoundEnabled: Boolean = true,
     val voiceCommandsEnabled: Boolean = false,
     val volumeKeyShutterEnabled: Boolean = true,
     val reviewAfterCapture: Boolean = true,

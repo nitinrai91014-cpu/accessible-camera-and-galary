@@ -62,9 +62,17 @@ data class GalleryUiState(
     val showAlbums: Boolean = false,
     val showDeleteConfirmation: Boolean = false,
     val permanentDelete: Boolean = false,
+    /** Exact items the open confirmation dialog will act on. */
+    val pendingDeleteItems: List<MediaItem> = emptyList(),
     val slideshowActive: Boolean = false
 ) {
     val selectedCount: Int get() = selection.size
+
+    /** Number of items the confirmation dialog will delete. */
+    val pendingDeleteCount: Int
+        get() = pendingDeleteItems.size.takeIf { it > 0 } ?: selectedCount
+
+    val inTrash: Boolean get() = filter.section == GallerySection.TRASH
 }
 
 /**
@@ -282,34 +290,69 @@ class GalleryViewModel @Inject constructor(
 
     // region Actions
 
+    /**
+     * Opens the delete confirmation.
+     *
+     * Inside Recently deleted a delete is always permanent, even when the caller asked for a
+     * move to trash. This is what previously produced a "Move to recently deleted" dialog
+     * from the Delete Permanently button. With nothing selected in trash the whole trash is
+     * targeted, which makes Empty trash work from the same dialog.
+     */
     fun requestDelete(permanent: Boolean = false) {
-        _uiState.update { it.copy(showDeleteConfirmation = true, permanentDelete = permanent) }
-        val selection = selectedItems()
-        val spoken = if (permanent) {
-            trashUseCase.confirmationFor(selection).message
-        } else {
-            "Confirm delete. " +
-                if (selection.isEmpty()) {
-                    "Items move to recently deleted and can be restored."
-                } else {
-                    trashUseCase.trashSummary(selection).removePrefix("Moved")
-                        .replaceFirstChar { it.uppercase() }
-                }
+        val state = _uiState.value
+        val effectivePermanent = permanent || state.inTrash
+        viewModelScope.launch {
+            val items = when {
+                selectedItems().isNotEmpty() -> selectedItems()
+                state.details?.item != null -> listOf(state.details.item)
+                effectivePermanent -> runCatching { mediaRepository.observeTrashed().first() }
+                    .getOrDefault(emptyList())
+                else -> emptyList()
+            }
+            if (items.isEmpty()) {
+                voice.announce(
+                    if (effectivePermanent) {
+                        "Recently deleted is empty. There is nothing to delete permanently."
+                    } else {
+                        "Select at least one item first."
+                    },
+                    AnnouncementPriority.HIGH
+                )
+                return@launch
+            }
+            _uiState.update {
+                it.copy(
+                    showDeleteConfirmation = true,
+                    permanentDelete = effectivePermanent,
+                    pendingDeleteItems = items
+                )
+            }
+            val spoken = if (effectivePermanent) {
+                trashUseCase.confirmationFor(items).message
+            } else {
+                trashUseCase.trashSummary(items).removePrefix("Moved")
+                    .replaceFirstChar { it.uppercase() }
+            }
+            voice.announce(spoken, AnnouncementPriority.HIGH)
         }
-        voice.announce(spoken, AnnouncementPriority.HIGH)
     }
 
     fun cancelDelete() {
-        _uiState.update { it.copy(showDeleteConfirmation = false) }
+        _uiState.update {
+            it.copy(showDeleteConfirmation = false, pendingDeleteItems = emptyList())
+        }
         voice.announce("Deletion cancelled", AnnouncementPriority.NORMAL)
     }
 
     fun confirmDelete() {
         val state = _uiState.value
-        val items = selectedItems().ifEmpty {
-            state.details?.item?.let { listOf(it) } ?: emptyList()
+        val items = state.pendingDeleteItems.ifEmpty {
+            selectedItems().ifEmpty { state.details?.item?.let { listOf(it) } ?: emptyList() }
         }
-        _uiState.update { it.copy(showDeleteConfirmation = false) }
+        val wasInTrash = state.inTrash
+        _uiState.update {
+            it.copy(showDeleteConfirmation = false, pendingDeleteItems = emptyList())
+        }
         if (items.isEmpty()) return
         viewModelScope.launch {
             if (state.permanentDelete) {
@@ -317,7 +360,13 @@ class GalleryViewModel @Inject constructor(
                 voice.playCue(AudioCue.TRASH)
                 voice.vibrate(HapticCue.SUCCESS)
                 voice.announce(message, AnnouncementPriority.CRITICAL)
-                _uiState.update { it.copy(details = null) }
+                _uiState.update { current ->
+                    current.copy(
+                        details = null,
+                        pendingDeleteItems = emptyList(),
+                        message = message
+                    )
+                }
             } else {
                 val message = trashUseCase.moveToTrash(items)
                 voice.playCue(AudioCue.TRASH)
@@ -326,11 +375,16 @@ class GalleryViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         pendingUndo = PendingUndo(items = items, message = message),
-                        details = null
+                        details = null,
+                        pendingDeleteItems = emptyList()
                     )
                 }
             }
             clearSelection()
+            if (wasInTrash) {
+                // Stay in Recently deleted so the empty state is visible immediately.
+                setSection(GallerySection.TRASH)
+            }
         }
     }
 
@@ -354,18 +408,28 @@ class GalleryViewModel @Inject constructor(
         }
     }
 
+    /** Opens Recently deleted directly, without going through the filter sheet. */
+    fun openTrash() {
+        setSection(GallerySection.TRASH)
+        val count = _uiState.value.trashedCount
+        voice.announce(
+            if (count == 0) {
+                "Recently deleted is empty."
+            } else {
+                "Recently deleted, $count ${if (count == 1) "item" else "items"}. " +
+                    "Activate Delete permanently to remove them, or Restore to keep them."
+            },
+            AnnouncementPriority.HIGH
+        )
+    }
+
+    /** Empty trash always goes through the permanent delete confirmation. */
     fun emptyTrash() {
-        val state = _uiState.value
-        if (state.trashedCount == 0) {
+        if (_uiState.value.trashedCount == 0) {
             voice.announce("Recently deleted is already empty", AnnouncementPriority.NORMAL)
             return
         }
-        viewModelScope.launch {
-            // Take one snapshot of the trash before deleting it permanently.
-            val trashed = mediaRepository.observeTrashed().first()
-            mediaRepository.deletePermanently(trashed)
-            voice.announce("Recently deleted emptied. ${trashed.size} items removed.", AnnouncementPriority.HIGH)
-        }
+        requestDelete(permanent = true)
     }
 
     fun deletePermanently(items: List<MediaItem>) {

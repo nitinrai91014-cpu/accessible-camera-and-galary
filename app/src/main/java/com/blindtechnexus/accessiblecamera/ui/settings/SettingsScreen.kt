@@ -31,6 +31,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.blindtechnexus.accessiblecamera.data.mlkit.MlKitModelState
+import com.blindtechnexus.accessiblecamera.domain.model.FaceDetectionInterval
 import com.blindtechnexus.accessiblecamera.domain.model.FontScaleOption
 import com.blindtechnexus.accessiblecamera.domain.model.SaveLocation
 import com.blindtechnexus.accessiblecamera.domain.model.SceneDescriptionInterval
@@ -203,17 +205,37 @@ fun SettingsScreen(
             onCheckedChange = viewModel::mirrorFront,
             description = "Mirrors the preview only. Saved photos are not mirrored."
         )
-        AccessibleSwitchRow(
-            label = "Face alignment guidance",
-            checked = settings.faceGuidanceEnabled,
-            onCheckedChange = viewModel::faceGuidance,
-            description = "Uses on-device face detection to help position a face."
+        AccessibleCycleRow(
+            label = "Face detection interval",
+            value = settings.faceDetectionInterval.label,
+            onActivate = viewModel::cycleFaceInterval,
+            description = settings.faceDetectionInterval.description
         )
+        FaceDetectionInterval.entries.forEach { interval ->
+            AccessibleChoiceRow(
+                label = interval.label,
+                selected = settings.faceDetectionInterval == interval,
+                supporting = interval.description,
+                onSelect = { viewModel.setFaceInterval(interval) }
+            )
+        }
         AccessibleCycleRow(
             label = "Scene description interval",
             value = settings.sceneDescriptionInterval.label,
             onActivate = viewModel::cycleSceneInterval,
             description = "Describes what the camera sees, on device, at this interval."
+        )
+        AccessibleSwitchRow(
+            label = "Read barcodes in descriptions",
+            checked = settings.barcodeScanningEnabled,
+            onCheckedChange = viewModel::barcodeScanning,
+            description = "Adds any barcode or QR value in view to the spoken scene description."
+        )
+        AccessibleSwitchRow(
+            label = "Shutter sound",
+            checked = settings.shutterSoundEnabled,
+            onCheckedChange = viewModel::shutterSound,
+            description = "Plays the system shutter and recording sounds."
         )
         AccessibleSwitchRow(
             label = "Review after capture",
@@ -272,6 +294,40 @@ fun SettingsScreen(
                 text = "Every 60 seconds",
                 onClick = { viewModel.recordingAnnounceInterval(60) },
                 modifier = Modifier.weight(1f)
+            )
+        }
+
+        SectionHeading(
+            text = "On-device intelligence",
+            supporting = "Google ML Kit runs entirely on this phone. No image ever leaves the device."
+        )
+        val mlKitState = state.mlKitState
+        Text(
+            text = when (mlKitState) {
+                is MlKitModelState.NotInstalled ->
+                    "Models are not installed yet. Face detection, scene description and barcode reading stay off until they are."
+                is MlKitModelState.Installing ->
+                    "Installing models. ${(mlKitState.progress * 100).toInt()} percent. ${mlKitState.message}"
+                is MlKitModelState.Installed -> "Models are installed, verified and ready."
+                is MlKitModelState.Failed -> "Installation failed. ${mlKitState.reason}"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (mlKitState is MlKitModelState.Installing) {
+            AccessibleSecondaryButton(
+                text = "Cancel model installation",
+                onClick = viewModel::cancelMlKitInstall
+            )
+        } else {
+            AccessibleSecondaryButton(
+                text = if (mlKitState is MlKitModelState.Installed) "Reinstall models" else "Install models",
+                onClick = viewModel::installMlKitModels,
+                supportingText = if (mlKitState is MlKitModelState.Installed) {
+                    "Copies the bundled models again and re-verifies them."
+                } else {
+                    "Copies the models bundled with the app into private app storage."
+                }
             )
         }
 

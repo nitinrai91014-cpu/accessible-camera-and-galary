@@ -16,11 +16,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.core.content.ContextCompat
 import com.blindtechnexus.accessiblecamera.core.util.Formatters
 import com.blindtechnexus.accessiblecamera.core.util.StorageInfo
+import com.blindtechnexus.accessiblecamera.core.util.SystemSoundPlayer
 import com.blindtechnexus.accessiblecamera.data.camera.CameraController
 import com.blindtechnexus.accessiblecamera.data.camera.CameraErrors
 import com.blindtechnexus.accessiblecamera.data.camera.CameraFrameAnalyzer
 import com.blindtechnexus.accessiblecamera.data.location.LocationProvider
 import com.blindtechnexus.accessiblecamera.data.media.MediaSaver
+import com.blindtechnexus.accessiblecamera.data.mlkit.MlKitModelProvisioner
+import com.blindtechnexus.accessiblecamera.data.mlkit.MlKitModelState
 import com.blindtechnexus.accessiblecamera.data.voice.VoiceRepositoryImpl
 import com.blindtechnexus.accessiblecamera.domain.model.VoiceCommand
 import com.blindtechnexus.accessiblecamera.ui.voice.VoiceCommandController
@@ -34,6 +37,7 @@ import com.blindtechnexus.accessiblecamera.domain.model.CameraPermissionState
 import com.blindtechnexus.accessiblecamera.domain.model.CameraState
 import com.blindtechnexus.accessiblecamera.domain.model.CameraUiState
 import com.blindtechnexus.accessiblecamera.domain.model.ExposureMode
+import com.blindtechnexus.accessiblecamera.domain.model.FaceDetectionInterval
 import com.blindtechnexus.accessiblecamera.domain.model.FaceGuidance
 import com.blindtechnexus.accessiblecamera.domain.model.Facing
 import com.blindtechnexus.accessiblecamera.domain.model.FailureCode
@@ -43,6 +47,7 @@ import com.blindtechnexus.accessiblecamera.domain.model.HapticCue
 import com.blindtechnexus.accessiblecamera.domain.model.LensInfo
 import com.blindtechnexus.accessiblecamera.domain.model.MeteringMode
 import com.blindtechnexus.accessiblecamera.domain.model.PhotoFileFormat
+import com.blindtechnexus.accessiblecamera.domain.model.SceneDescriptionInterval
 import com.blindtechnexus.accessiblecamera.domain.model.StabilizationMode
 import com.blindtechnexus.accessiblecamera.domain.model.TimerDuration
 import com.blindtechnexus.accessiblecamera.domain.model.VideoQualityOption
@@ -57,9 +62,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -90,6 +95,8 @@ class CameraViewModel @Inject constructor(
     private val voice: VoiceRepositoryImpl,
     private val voiceCommands: VoiceCommandController,
     private val captureReadiness: CaptureReadinessUseCase,
+    private val mlKitModels: MlKitModelProvisioner,
+    private val systemSounds: SystemSoundPlayer,
     @ApplicationScope private val appScope: CoroutineScope
 ) : ViewModel() {
 
@@ -114,8 +121,12 @@ class CameraViewModel @Inject constructor(
     private var settings: AppSettings = AppSettings.Defaults
     private var countdownJob: Job? = null
     private var recordingTimerJob: Job? = null
-    private var sceneJob: Job? = null
     private var burstJob: Job? = null
+    private var bindJob: Job? = null
+    private var mlKitPromptDismissed = false
+
+    /** Guards the one-time "models installed" announcement, including the first state emission. */
+    private var mlKitReadyAnnounced = mlKitModels.isInstalled
     private var recordingStartMillis = 0L
     private var pausedDuration = 0L
     private var pauseStartMillis = 0L
@@ -140,7 +151,16 @@ class CameraViewModel @Inject constructor(
                         gridVisible = current.showGridLines,
                         levelVisible = current.showLevelIndicator,
                         mirrorFrontCamera = current.mirrorFrontCamera,
-                        faceGuidanceEnabled = current.faceGuidanceEnabled,
+                        faceDetectionInterval = current.faceDetectionInterval,
+                        sceneDescriptionInterval = current.sceneDescriptionInterval,
+                        barcodeScanningEnabled = current.barcodeScanningEnabled,
+                        shutterSoundEnabled = current.shutterSoundEnabled,
+                        faceGuidance = when {
+                            !current.faceDetectionInterval.enabled -> FaceGuidance.Disabled
+                            state.faceGuidance is FaceGuidance.Disabled ->
+                                FaceGuidance.NoFace("Looking for a face")
+                            else -> state.faceGuidance
+                        }
                     )
                 }
                 voice.configure(current.speechRate, current.speechPitch)
@@ -150,12 +170,52 @@ class CameraViewModel @Inject constructor(
                     voiceGuidance = current.voiceGuidanceEnabled
                 )
                 _uiState.update { it.copy(voiceCommandsEnabled = current.voiceCommandsEnabled) }
-                frameAnalyzer.faceDetectionEnabled = current.faceGuidanceEnabled
-                frameAnalyzer.sceneDescriptionEnabled =
-                    current.sceneDescriptionInterval != com.blindtechnexus.accessiblecamera.domain.model.SceneDescriptionInterval.OFF
-                if (current.faceGuidanceEnabled) {
-                    frameAnalyzer.reset()
+                applyAnalysisSettings(current)
+                maybeOfferMlKitInstall()
+            }
+        }
+        viewModelScope.launch {
+            mlKitModels.state.collect { modelState ->
+                _uiState.update { current ->
+                    when (modelState) {
+                        is MlKitModelState.Installed -> current.copy(
+                            mlKitModelsReady = true,
+                            mlKitInstalling = false,
+                            mlKitProgress = 1f,
+                            mlKitInstallMessage = "Models ready",
+                            mlKitFailure = null,
+                            showMlKitDownloadPrompt = false
+                        )
+                        is MlKitModelState.NotInstalled -> current.copy(
+                            mlKitModelsReady = false,
+                            mlKitInstalling = false,
+                            mlKitProgress = 0f,
+                            mlKitFailure = null
+                        )
+                        is MlKitModelState.Installing -> current.copy(
+                            mlKitInstalling = true,
+                            mlKitProgress = modelState.progress,
+                            mlKitInstallMessage = modelState.message,
+                            mlKitFailure = null,
+                            showMlKitDownloadPrompt = false
+                        )
+                        is MlKitModelState.Failed -> current.copy(
+                            mlKitInstalling = false,
+                            mlKitFailure = modelState.reason,
+                            showMlKitDownloadPrompt = false
+                        )
+                    }
                 }
+                if (modelState is MlKitModelState.Installed && !mlKitReadyAnnounced) {
+                    mlKitReadyAnnounced = true
+                    voice.announce("On-device models installed. Face detection and scene description are ready.", AnnouncementPriority.HIGH)
+                } else if (modelState is MlKitModelState.Failed) {
+                    voice.announce(
+                        "The on-device models could not be installed. ${modelState.reason}",
+                        AnnouncementPriority.CRITICAL
+                    )
+                }
+                maybeOfferMlKitInstall()
             }
         }
         viewModelScope.launch {
@@ -228,7 +288,31 @@ class CameraViewModel @Inject constructor(
         }
         refreshLatestThumbnail()
         checkPermissionState()
-        startSceneSchedule()
+    }
+
+    /** Pushes the current ML Kit and sound preferences into the analyzer and sound player. */
+    private fun applyAnalysisSettings(current: AppSettings) {
+        frameAnalyzer.setFaceInterval(current.faceDetectionInterval.seconds)
+        frameAnalyzer.setSceneInterval(current.sceneDescriptionInterval.seconds)
+        frameAnalyzer.barcodeScanningEnabled = current.barcodeScanningEnabled
+        systemSounds.enabled = current.shutterSoundEnabled
+    }
+
+    /**
+     * Shows the one-time Download Required dialog when an ML Kit feature is switched on but
+     * the on-device models have not been installed yet.
+     */
+    private fun maybeOfferMlKitInstall() {
+        val current = _uiState.value
+        val wantsModels = current.faceDetectionInterval.enabled ||
+            current.sceneDescriptionInterval.enabled ||
+            current.barcodeScanningEnabled
+        val shouldOffer = current.permissionState == CameraPermissionState.Granted &&
+            wantsModels &&
+            !current.mlKitModelsReady &&
+            !current.mlKitInstalling &&
+            !mlKitPromptDismissed
+        _uiState.update { it.copy(showMlKitDownloadPrompt = shouldOffer) }
     }
 
     // region Permissions
@@ -271,6 +355,8 @@ class CameraViewModel @Inject constructor(
         }
         if (granted) {
             voice.announce("Camera permission granted", AnnouncementPriority.HIGH)
+            checkPermissionState()
+            maybeOfferMlKitInstall()
         } else if (permanentlyDenied) {
             voice.announce(
                 CameraErrors.permissionPermanentlyDenied().spokenMessage,
@@ -292,44 +378,75 @@ class CameraViewModel @Inject constructor(
 
     // region Binding
 
-    /** Called by the screen once the preview view and lifecycle are available. */
+    /**
+     * Called by the screen once the preview view and lifecycle are available.
+     *
+     * The previous implementation read the capability registry with `first()`, which returns
+     * the empty initial value while detection is still running in the background. That made a
+     * perfectly good camera look missing. Here the registry is refreshed when it has no camera
+     * yet, and CameraX itself is the final authority before any error is shown.
+     */
     fun bindCamera(lifecycleOwner: LifecycleOwner, view: PreviewView) {
         boundLifecycleOwner = lifecycleOwner
         previewView = view
-        val state = _uiState.value
-        if (state.permissionState != CameraPermissionState.Granted) {
+        if (_uiState.value.permissionState != CameraPermissionState.Granted) {
             checkPermissionState()
             if (_uiState.value.permissionState != CameraPermissionState.Granted) {
                 _uiState.update { it.copy(state = CameraState.IDLE) }
                 return
             }
         }
-        if (_uiState.value.state == CameraState.INITIALIZING) return
+        if (bindJob?.isActive == true) return
         _uiState.update { it.copy(state = CameraState.INITIALIZING, failure = null) }
-        viewModelScope.launch {
-            val capabilities = capabilityRepository.capabilities.first()
+        bindJob = viewModelScope.launch {
             val provider = cameraController.provider()
             if (provider == null) {
                 failWith(
                     com.blindtechnexus.accessiblecamera.domain.model.CameraFailure(
                         code = FailureCode.CAMERA_UNAVAILABLE,
                         spokenMessage = "The camera could not start because the camera service is unavailable.",
-                        visibleMessage = "Camera unavailable"
+                        visibleMessage = "Camera service unavailable"
                     )
                 )
                 return@launch
             }
+
+            // Refresh detection only when it has not produced a camera yet. Awaiting this is
+            // enough to remove the startup race without slowing down every rebind.
+            var capabilities = capabilityRepository.capabilities.first()
             if (!capabilities.hasAnyCamera) {
-                failWith(
-                    com.blindtechnexus.accessiblecamera.domain.model.CameraFailure(
-                        code = FailureCode.CAMERA_UNAVAILABLE,
-                        spokenMessage = "This device does not have a usable camera.",
-                        visibleMessage = "No camera found",
-                        isRetryable = false
-                    )
-                )
-                return@launch
+                capabilities = capabilityRepository.refresh()
             }
+
+            val lens = resolveActiveLens(capabilities)
+            if (lens != null && lens.id != _uiState.value.activeLens?.id) {
+                _uiState.update { it.copy(activeLens = lens) }
+            }
+
+            val selector = cameraController.selectorForLens(lens)
+            if (!cameraController.hasCamera(selector)) {
+                // One more attempt with fresh detection before telling the user the device has
+                // no camera; hot plugging, a camera service restart or stale metadata can all
+                // resolve here.
+                capabilities = capabilityRepository.refresh()
+                val retryLens = resolveActiveLens(capabilities)
+                if (!cameraController.hasCamera(cameraController.selectorForLens(retryLens))) {
+                    failWith(
+                        com.blindtechnexus.accessiblecamera.domain.model.CameraFailure(
+                            code = FailureCode.CAMERA_UNAVAILABLE,
+                            spokenMessage = "Android did not report a usable camera. Close other apps that may be using the camera, then retry.",
+                            visibleMessage = "No usable camera found",
+                            isRetryable = true
+                        )
+                    )
+                    return@launch
+                }
+            }
+
+            val state = _uiState.value
+            // Keep the previous lens list when detection produced none, so the lens picker never
+            // flickers empty during a rebind.
+            val lensList = capabilities.lenses.ifEmpty { state.availableLenses }
             val storage = StorageInfo.snapshot(context)
             val error = cameraController.bind(
                 CameraController.BindRequest(
@@ -339,7 +456,7 @@ class CameraViewModel @Inject constructor(
                     aspectRatio = state.aspectRatio,
                     flashMode = state.flashMode,
                     mirrorFrontCamera = settings.mirrorFrontCamera,
-                    targetRotation = view.display.rotation,
+                    targetRotation = runCatching { view.display.rotation }.getOrDefault(cameraController.displayRotation()),
                     photoFormat = state.photoFormat,
                     videoQualityLabel = state.videoQuality?.qualityLabel ?: "FHD",
                     videoFrameRate = state.videoFrameRate,
@@ -347,31 +464,39 @@ class CameraViewModel @Inject constructor(
                     stabilization = state.stabilization,
                     captureModeFast = true,
                     enableVideo = capabilities.isModeAvailable(CameraMode.VIDEO),
-                    enableAnalysis = capabilities.supportsFaceDetection ||
-                        settings.sceneDescriptionInterval != com.blindtechnexus.accessiblecamera.domain.model.SceneDescriptionInterval.OFF
+                    // Analysis is always bound while the camera is open. The analyzer throttles
+                    // itself, and this way turning Describe Scene on later works immediately
+                    // instead of needing a rebind.
+                    enableAnalysis = true
                 )
             )
             if (error == null) {
                 cameraController.analysisUseCase()?.let { analysis ->
                     analysis.setAnalyzer(cameraController.captureExecutor, frameAnalyzer)
-                    frameAnalyzer.isFrontCamera = state.isFrontCamera
-                    frameAnalyzer.reset()
                 }
+                frameAnalyzer.isFrontCamera = _uiState.value.isFrontCamera
                 frameAnalyzer.onGuidance = { text -> appScope.launch { announceFaceGuidance(text) } }
+                frameAnalyzer.onBarcode = { text -> appScope.launch { announceBarcode(text) } }
+                frameAnalyzer.reset()
                 _uiState.update {
                     it.copy(
                         state = CameraState.READY,
                         failure = null,
+                        capabilities = capabilities,
+                        availableLenses = lensList,
                         isLowStorage = storage.isLow,
                         exposureRange = cameraController.exposureState()?.first ?: it.exposureRange,
-                        supportsZoom = (it.activeLens?.zoomMax ?: 1f) > 1.01f
+                        supportsZoom = (it.activeLens?.zoomMax ?: 1f) > 1.01f,
+                        torchEnabled = cameraController.torchOn.value,
+                        zoomRatio = cameraController.zoomRatio.value
                     )
                 }
+                maybeOfferMlKitInstall()
                 voice.announce(
                     buildString {
-                        append(state.selectedMode.speechLabel)
+                        append(_uiState.value.selectedMode.speechLabel)
                         append(" ready. ")
-                        append(if (state.isFrontCamera) "Front camera. " else "Back camera. ")
+                        append(if (_uiState.value.isFrontCamera) "Front camera. " else "Back camera. ")
                         append("Shutter control is at the bottom of the screen.")
                     },
                     AnnouncementPriority.NORMAL
@@ -394,12 +519,40 @@ class CameraViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Picks the lens to bind: the user's current lens when it still exists, otherwise the
+     * first rear lens, otherwise any lens, and finally a lens read straight from CameraX.
+     */
+    private fun resolveActiveLens(capabilities: com.blindtechnexus.accessiblecamera.domain.model.CameraCapabilities): LensInfo? {
+        val current = _uiState.value.activeLens
+        val lenses = capabilities.lenses
+        val fromRegistry = current?.let { existing -> lenses.firstOrNull { it.id == existing.id } }
+            ?: lenses.firstOrNull { it.facing == Facing.BACK }
+            ?: lenses.firstOrNull()
+        if (fromRegistry != null) return fromRegistry
+        val facing = current?.facing ?: Facing.BACK
+        return cameraController.defaultLens(facing) ?: cameraController.defaultLens(Facing.FRONT)
+    }
+
     fun unbindCamera() {
         cancelCountdown()
         burstJob?.cancel()
+        bindJob?.cancel()
+        bindJob = null
         cameraController.unbind()
         frameAnalyzer.reset()
-        _uiState.update { it.copy(state = CameraState.IDLE) }
+        _uiState.update { it.copy(state = CameraState.IDLE, torchEnabled = false) }
+    }
+
+    /** Re-binds when returning to the tab, because the preview was released on dispose. */
+    fun onScreenResumed() {
+        val owner = boundLifecycleOwner ?: return
+        val view = previewView ?: return
+        if (_uiState.value.permissionState == CameraPermissionState.Granted &&
+            cameraController.isBound.value.not()
+        ) {
+            bindCamera(owner, view)
+        }
     }
 
     fun retryBinding() {
@@ -474,23 +627,39 @@ class CameraViewModel @Inject constructor(
             voice.announce("Stop recording before switching cameras.", AnnouncementPriority.HIGH)
             return
         }
-        val lenses = state.availableLenses
-        if (lenses.size < 2) {
-            voice.announce("This device has only one camera.", AnnouncementPriority.HIGH)
-            return
-        }
         val current = state.activeLens
         val nextFacing = if (current?.facing == Facing.FRONT) Facing.BACK else Facing.FRONT
-        val next = lenses.firstOrNull { it.facing == nextFacing && it.type != com.blindtechnexus.accessiblecamera.domain.model.LensType.ULTRAWIDE }
-            ?: lenses.firstOrNull { it.facing == nextFacing }
-        if (next == null) {
-            voice.announce("This device does not have a $nextFacing camera.", AnnouncementPriority.HIGH)
+        val lenses = state.availableLenses.ifEmpty { state.capabilities.lenses }
+        val next = lenses.firstOrNull {
+            it.facing == nextFacing && it.type != com.blindtechnexus.accessiblecamera.domain.model.LensType.ULTRAWIDE
+        } ?: lenses.firstOrNull { it.facing == nextFacing }
+            ?: cameraController.defaultLens(nextFacing)
+
+        if (next == null || !cameraController.hasCameraFor(nextFacing)) {
+            voice.announce(
+                if (nextFacing == Facing.FRONT) {
+                    "This device does not report a front camera."
+                } else {
+                    "This device does not report a rear camera."
+                },
+                AnnouncementPriority.HIGH
+            )
             return
+        }
+
+        // Turning the torch off before rebinding avoids leaving a front camera with a stale
+        // torch request and makes the next announcement accurate.
+        if (_uiState.value.torchEnabled) {
+            cameraController.setTorch(false)
         }
         _uiState.update { it.copy(activeLens = next, torchEnabled = false) }
         frameAnalyzer.isFrontCamera = next.facing == Facing.FRONT
         voice.vibrate(HapticCue.SELECTION)
-        voice.announce("Switched to ${next.speechDescription}", AnnouncementPriority.NORMAL)
+        voice.announce(
+            "Switched to ${if (next.facing == Facing.FRONT) "front camera" else "rear camera"}. " +
+                "${if (next.facing == Facing.FRONT) "Switch to Rear Camera button" else "Switch to Front Camera button"} is now available.",
+            AnnouncementPriority.NORMAL
+        )
         rebindIfPossible()
     }
 
@@ -624,6 +793,7 @@ class CameraViewModel @Inject constructor(
         val file = mediaSaver.createTempFile(isVideo = false)
         cameraController.capturePhoto(file, _uiState.value.flashMode) { result ->
             result.onSuccess { saved ->
+                systemSounds.playShutter()
                 voice.playCue(AudioCue.SHUTTER)
                 voice.vibrate(HapticCue.CAPTURE)
                 persistPhoto(saved, announceSaved = false) { ok ->
@@ -651,6 +821,7 @@ class CameraViewModel @Inject constructor(
         pendingCaptureFile = file
         cameraController.capturePhoto(file, before.flashMode) { result ->
             result.onSuccess { saved ->
+                systemSounds.playShutter()
                 voice.playCue(AudioCue.SHUTTER)
                 voice.vibrate(HapticCue.CAPTURE)
                 _uiState.update { it.copy(state = CameraState.SAVING) }
@@ -765,6 +936,7 @@ class CameraViewModel @Inject constructor(
         val file = mediaSaver.createTempFile(isVideo = false)
         cameraController.capturePhoto(file, FlashMode.OFF) { result ->
             result.onSuccess { saved ->
+                systemSounds.playShutter()
                 voice.playCue(AudioCue.SHUTTER)
                 voice.vibrate(HapticCue.CAPTURE)
                 persistPhoto(saved) { ok ->
@@ -837,6 +1009,7 @@ class CameraViewModel @Inject constructor(
                 failure = null
             )
         }
+        systemSounds.playRecordingStart()
         voice.playCue(AudioCue.RECORDING_START)
         voice.vibrate(HapticCue.RECORDING_START)
         voice.announce(
@@ -875,6 +1048,7 @@ class CameraViewModel @Inject constructor(
     fun stopRecording() {
         if (!_uiState.value.state.canStopRecording) return
         _uiState.update { it.copy(state = CameraState.SAVING) }
+        systemSounds.playRecordingStop()
         voice.playCue(AudioCue.RECORDING_STOP)
         voice.vibrate(HapticCue.RECORDING_STOP)
         cameraController.stopRecording()
@@ -1024,20 +1198,31 @@ class CameraViewModel @Inject constructor(
     }
 
     fun toggleTorch() {
+        setTorch(!_uiState.value.torchEnabled)
+    }
+
+    /**
+     * Turns the flashlight on or off. Used by the dedicated Flashlight switch in photo mode
+     * and by the flash button when it reaches the Torch value.
+     */
+    fun setTorch(enabled: Boolean) {
         val state = _uiState.value
-        if (!state.canUseTorch) {
-            voice.announce("This camera has no torch.", AnnouncementPriority.HIGH)
+        val hasFlash = state.canUseTorch || cameraController.hasFlash()
+        if (!hasFlash) {
+            voice.announce("This camera has no flashlight.", AnnouncementPriority.HIGH)
             return
         }
-        val next = !state.torchEnabled
-        val applied = cameraController.setTorch(next)
+        val applied = cameraController.setTorch(enabled)
         if (!applied) {
-            voice.announce("The torch could not be turned ${if (next) "on" else "off"}.", AnnouncementPriority.HIGH)
+            voice.announce(
+                "The flashlight could not be turned ${if (enabled) "on" else "off"}.",
+                AnnouncementPriority.HIGH
+            )
             return
         }
-        _uiState.update { it.copy(torchEnabled = next) }
+        _uiState.update { it.copy(torchEnabled = enabled) }
         voice.vibrate(HapticCue.SELECTION)
-        voice.announce(if (next) "Torch on" else "Torch off", AnnouncementPriority.NORMAL)
+        voice.announce(if (enabled) "Flashlight on" else "Flashlight off", AnnouncementPriority.NORMAL)
     }
 
     fun cycleTimer() {
@@ -1244,18 +1429,144 @@ class CameraViewModel @Inject constructor(
         rebindIfPossible()
     }
 
+    /** Switches face guidance between off and the default three second interval. */
     fun toggleFaceGuidance() {
-        val next = !_uiState.value.faceGuidanceEnabled
+        val next = if (_uiState.value.faceGuidanceEnabled) {
+            FaceDetectionInterval.OFF
+        } else {
+            FaceDetectionInterval.THREE_SECONDS
+        }
+        setFaceDetectionInterval(next)
+    }
+
+    /**
+     * Sets how often ML Kit checks face alignment. The value is persisted and applied to the
+     * analyzer immediately so the next frame uses the new cadence.
+     */
+    fun setFaceDetectionInterval(interval: FaceDetectionInterval) {
         _uiState.update {
             it.copy(
-                faceGuidanceEnabled = next,
-                faceGuidance = if (next) FaceGuidance.NoFace("Point the camera at a face") else FaceGuidance.Disabled
+                faceDetectionInterval = interval,
+                faceGuidance = when {
+                    !interval.enabled -> FaceGuidance.Disabled
+                    !_uiState.value.mlKitModelsReady -> FaceGuidance.Unavailable
+                    else -> FaceGuidance.NoFace("Point the camera at a face")
+                }
             )
         }
-        frameAnalyzer.faceDetectionEnabled = next
-        viewModelScope.launch { settingsRepository.update { it.copy(faceGuidanceEnabled = next) } }
-        voice.announce(if (next) "Face guidance on" else "Face guidance off", AnnouncementPriority.NORMAL)
+        frameAnalyzer.setFaceInterval(interval.seconds)
+        frameAnalyzer.reset()
+        viewModelScope.launch {
+            settingsRepository.update { it.copy(faceDetectionInterval = interval) }
+        }
+        if (!interval.enabled) {
+            voice.announce("Face detection off", AnnouncementPriority.NORMAL)
+        } else {
+            voice.announce("Face detection ${interval.label.lowercase()}", AnnouncementPriority.NORMAL)
+            maybeOfferMlKitInstall()
+        }
     }
+
+    /** Sets how often the scene is described, including the every three second option. */
+    fun setSceneDescriptionInterval(interval: SceneDescriptionInterval) {
+        _uiState.update {
+            it.copy(
+                sceneDescriptionInterval = interval,
+                sceneDescription = if (interval.enabled) it.sceneDescription else null
+            )
+        }
+        frameAnalyzer.setSceneInterval(interval.seconds)
+        viewModelScope.launch {
+            settingsRepository.update { it.copy(sceneDescriptionInterval = interval) }
+        }
+        if (!interval.enabled) {
+            voice.announce("Scene description off", AnnouncementPriority.NORMAL)
+        } else {
+            voice.announce("Describe scene ${interval.label.lowercase()}", AnnouncementPriority.NORMAL)
+            maybeOfferMlKitInstall()
+        }
+    }
+
+    fun setBarcodeScanningEnabled(enabled: Boolean) {
+        frameAnalyzer.barcodeScanningEnabled = enabled
+        _uiState.update { it.copy(barcodeScanningEnabled = enabled) }
+        viewModelScope.launch {
+            settingsRepository.update { it.copy(barcodeScanningEnabled = enabled) }
+        }
+        voice.announce(if (enabled) "Barcode reading on" else "Barcode reading off", AnnouncementPriority.NORMAL)
+    }
+
+    /** Runs one scene description immediately. */
+    fun describeSceneNow() {
+        if (!ensureMlKitReady("Scene description")) return
+        frameAnalyzer.requestSceneDescription()
+        frameAnalyzer.barcodeScanningEnabled = _uiState.value.barcodeScanningEnabled
+        _uiState.update { it.copy(describeSceneBusy = true) }
+        voice.announce("Describing the scene", AnnouncementPriority.LOW)
+        viewModelScope.launch {
+            delay(2_500)
+            _uiState.update { it.copy(describeSceneBusy = false) }
+        }
+    }
+
+    /** Runs one barcode read immediately. */
+    fun scanBarcodeNow() {
+        if (!ensureMlKitReady("Barcode reading")) return
+        frameAnalyzer.requestBarcodeScan()
+        voice.announce("Looking for a barcode", AnnouncementPriority.LOW)
+    }
+
+    private fun ensureMlKitReady(feature: String): Boolean {
+        if (_uiState.value.mlKitModelsReady) return true
+        _uiState.update { it.copy(showMlKitDownloadPrompt = true) }
+        voice.announce(
+            "$feature needs the on-device models. Download them first.",
+            AnnouncementPriority.HIGH
+        )
+        return false
+    }
+
+    // region ML Kit model installation
+
+    /** Starts the one-time model install from the Download Required dialog. */
+    fun installMlKitModels() {
+        _uiState.update { it.copy(showMlKitDownloadPrompt = false, mlKitFailure = null) }
+        mlKitModels.install()
+        voice.announce("Installing on-device models", AnnouncementPriority.HIGH)
+    }
+
+    fun cancelMlKitInstall() {
+        // A deliberate cancel must not be followed by an immediate second prompt.
+        mlKitPromptDismissed = true
+        mlKitModels.cancel()
+        _uiState.update {
+            it.copy(mlKitInstalling = false, mlKitProgress = 0f, showMlKitDownloadPrompt = false)
+        }
+        voice.announce(
+            "Model installation cancelled. Face detection and scene description stay off until you install them.",
+            AnnouncementPriority.HIGH
+        )
+    }
+
+    fun dismissMlKitPrompt() {
+        mlKitPromptDismissed = true
+        _uiState.update { it.copy(showMlKitDownloadPrompt = false) }
+        voice.announce(
+            "Download cancelled. You can install the models later from Settings.",
+            AnnouncementPriority.NORMAL
+        )
+    }
+
+    fun showMlKitPrompt() {
+        mlKitPromptDismissed = false
+        _uiState.update { it.copy(showMlKitDownloadPrompt = true, mlKitFailure = null) }
+    }
+
+    fun dismissMlKitFailure() {
+        _uiState.update { it.copy(mlKitFailure = null) }
+    }
+
+    // endregion
 
     // endregion
 
@@ -1284,20 +1595,9 @@ class CameraViewModel @Inject constructor(
         voice.announce(text, AnnouncementPriority.LOW)
     }
 
-    /**
-     * Scene descriptions arrive from the analyzer, which already throttles itself. This
-     * loop keeps the analyzer's scene flag in step with the settings interval.
-     */
-    private fun startSceneSchedule() {
-        sceneJob?.cancel()
-        sceneJob = viewModelScope.launch {
-            while (true) {
-                delay(2000)
-                val interval = settings.sceneDescriptionInterval.seconds
-                frameAnalyzer.sceneDescriptionEnabled = interval > 0
-                frameAnalyzer.guidanceRepeatMillis = (interval.coerceAtLeast(2) * 500L)
-            }
-        }
+    private fun announceBarcode(text: String) {
+        _uiState.update { it.copy(lastBarcode = text) }
+        voice.announce(text, AnnouncementPriority.HIGH)
     }
 
     fun refreshLatestThumbnail() {
@@ -1473,10 +1773,11 @@ class CameraViewModel @Inject constructor(
         super.onCleared()
         countdownJob?.cancel()
         recordingTimerJob?.cancel()
-        sceneJob?.cancel()
         burstJob?.cancel()
+        bindJob?.cancel()
         voiceCommands.detachHandler()
         voiceCommands.stopListening()
         cameraController.release()
+        systemSounds.release()
     }
 }

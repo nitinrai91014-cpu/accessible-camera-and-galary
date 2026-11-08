@@ -32,8 +32,12 @@ internal object SettingsKeys {
     val GEOTAGGING = booleanPreferencesKey("geotagging_enabled")
     val WATERMARK = booleanPreferencesKey("watermark_enabled")
     val WATERMARK_TEXT = stringPreferencesKey("watermark_text")
+    /** Legacy boolean, still written so a downgrade keeps working. */
     val FACE_GUIDANCE = booleanPreferencesKey("face_guidance_enabled")
+    val FACE_INTERVAL = stringPreferencesKey("face_detection_interval")
     val SCENE_INTERVAL = stringPreferencesKey("scene_description_interval")
+    val BARCODE_SCANNING = booleanPreferencesKey("barcode_scanning_enabled")
+    val SHUTTER_SOUND = booleanPreferencesKey("shutter_sound_enabled")
     val VOICE_COMMANDS = booleanPreferencesKey("voice_commands_enabled")
     val VOLUME_KEY_SHUTTER = booleanPreferencesKey("volume_key_shutter")
     val REVIEW_AFTER_CAPTURE = booleanPreferencesKey("review_after_capture")

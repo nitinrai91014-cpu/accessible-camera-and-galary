@@ -113,6 +113,7 @@ fun GalleryScreen(
             onToggleLayout = viewModel::cycleLayout,
             onOpenFilters = { viewModel.toggleFiltersSheet(true) },
             onOpenAlbums = { viewModel.toggleAlbumsSheet(true) },
+            onOpenTrash = viewModel::openTrash,
             onSearch = viewModel::setQuery,
             onSubmitSearch = viewModel::submitQuery,
             onSelectAll = {
@@ -132,7 +133,7 @@ fun GalleryScreen(
             SelectionActionBar(
                 state = state,
                 onShare = { viewModel.share(context) },
-                onDelete = { viewModel.requestDelete(permanent = false) },
+                onDelete = { viewModel.requestDelete(permanent = state.inTrash) },
                 onFavorite = { viewModel.toggleFavorite(viewModel.selectedItems()) },
                 onClear = viewModel::clearSelection,
                 onDetails = {
@@ -150,7 +151,8 @@ fun GalleryScreen(
                     EmptyState(
                         section = state.filter.section,
                         onOpenFilters = { viewModel.toggleFiltersSheet(true) },
-                        onClearFilters = viewModel::clearFilters
+                        onClearFilters = viewModel::clearFilters,
+                        onOpenTrash = viewModel::openTrash
                     )
                 }
                 else -> {
@@ -247,9 +249,13 @@ fun GalleryScreen(
                 viewModel.setAlbum(it)
                 viewModel.toggleAlbumsSheet(false)
             },
-            onEmptyTrash = {
-                viewModel.requestDelete(permanent = true)
+            onShowTrash = {
                 viewModel.toggleAlbumsSheet(false)
+                viewModel.openTrash()
+            },
+            onEmptyTrash = {
+                viewModel.toggleAlbumsSheet(false)
+                viewModel.emptyTrash()
             },
             announce = announce
         )
@@ -271,31 +277,50 @@ fun GalleryScreen(
     }
 
     if (state.showDeleteConfirmation) {
-        val count = state.selectedCount.coerceAtLeast(1)
+        val count = state.pendingDeleteCount.coerceAtLeast(1)
+        val noun = if (count == 1) "item" else "items"
         AccessibleConfirmDialog(
-            title = if (state.permanentDelete) "Permanently delete?" else "Move to recently deleted?",
-            message = if (state.permanentDelete) {
-                "This permanently deletes $count items. This cannot be undone."
+            title = if (state.permanentDelete) {
+                "Delete Selected Items Permanently"
             } else {
-                "This moves $count items to recently deleted. You can restore them later."
+                "Move to recently deleted?"
             },
-            confirmLabel = if (state.permanentDelete) "Delete permanently" else "Move to trash",
+            message = if (state.permanentDelete) {
+                "Delete $count $noun permanently? This cannot be undone."
+            } else {
+                "This moves $count $noun to recently deleted. You can restore them later."
+            },
+            confirmLabel = if (state.permanentDelete) "Delete" else "Move to trash",
             dismissLabel = "Cancel",
             onConfirm = viewModel::confirmDelete,
             onDismiss = viewModel::cancelDelete,
             destructive = true,
-            supporting = "You can undo a move to trash immediately after it happens."
+            supporting = if (state.permanentDelete) {
+                "Cannot be undone. Confirm only if you want these items gone for good."
+            } else {
+                "You can undo a move to trash immediately after it happens."
+            }
         )
     }
 
     pendingDeleteItem?.let { item ->
+        val permanent = item.inTrash
         AccessibleConfirmDialog(
-            title = "Delete this item?",
-            message = "Move ${item.displayName} to recently deleted?",
-            confirmLabel = "Move to trash",
+            title = if (permanent) "Delete Selected Items Permanently" else "Delete this item?",
+            message = if (permanent) {
+                "Delete ${item.displayName} permanently? This cannot be undone."
+            } else {
+                "Move ${item.displayName} to recently deleted?"
+            },
+            confirmLabel = if (permanent) "Delete" else "Move to trash",
+            supporting = if (permanent) "Cannot be undone." else "You can restore it from the trash.",
             onConfirm = {
-                viewModel.toggleSelection(item)
-                viewModel.requestDelete(permanent = false)
+                if (permanent) {
+                    viewModel.deletePermanently(listOf(item))
+                } else {
+                    viewModel.toggleSelection(item)
+                    viewModel.requestDelete(permanent = false)
+                }
                 pendingDeleteItem = null
             },
             onDismiss = { pendingDeleteItem = null }
@@ -310,6 +335,7 @@ private fun GalleryHeader(
     onToggleLayout: () -> Unit,
     onOpenFilters: () -> Unit,
     onOpenAlbums: () -> Unit,
+    onOpenTrash: () -> Unit,
     onSearch: (String) -> Unit,
     onSubmitSearch: () -> Unit,
     onSelectAll: () -> Unit
@@ -367,6 +393,21 @@ private fun GalleryHeader(
             AccessibleSecondaryButton(
                 text = "Filter",
                 onClick = onOpenFilters,
+                modifier = Modifier.weight(1f)
+            )
+            // The trash is one tap away instead of hiding behind the filter sheet.
+            AccessibleSecondaryButton(
+                text = if (state.trashedCount > 0) {
+                    "Trash, ${state.trashedCount}"
+                } else {
+                    "Trash"
+                },
+                onClick = onOpenTrash,
+                supportingText = if (state.trashedCount > 0) {
+                    "${state.trashedCount} items in recently deleted"
+                } else {
+                    "Recently deleted is empty"
+                },
                 modifier = Modifier.weight(1f)
             )
             if (!state.selectionMode) {
@@ -494,19 +535,42 @@ private fun LoadingState() {
 private fun EmptyState(
     section: GallerySection,
     onOpenFilters: () -> Unit,
-    onClearFilters: () -> Unit
+    onClearFilters: () -> Unit,
+    onOpenTrash: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(Dimens.ScreenPadding),
+            .padding(Dimens.ScreenPadding)
+            .semantics(mergeDescendants = true) {
+                liveRegion = LiveRegionMode.Polite
+            },
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        if (section == GallerySection.TRASH) {
+            // A plain, always-present text view so the empty trash is announced and readable.
+            Text(
+                text = "Recently deleted is empty",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(Modifier.height(Dimens.SmallSpacing))
+            Text(
+                text = "Items you delete appear here first. Nothing will be removed for good until you choose Delete permanently.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(Dimens.SectionSpacing))
+            AccessibleSecondaryButton(text = "Back to all media", onClick = onClearFilters)
+            return
+        }
         Text(
             text = when (section) {
-                GallerySection.TRASH -> "Recently deleted is empty"
                 GallerySection.FAVORITES -> "No favorites yet"
+                GallerySection.PHOTOS -> "No photos to show"
+                GallerySection.VIDEOS -> "No videos to show"
+                GallerySection.SCREENSHOTS -> "No screenshots to show"
                 else -> "No items to show"
             },
             style = MaterialTheme.typography.titleMedium,
@@ -522,6 +586,10 @@ private fun EmptyState(
         AccessibleSecondaryButton(text = "Open filters", onClick = onOpenFilters)
         Spacer(Modifier.height(Dimens.SmallSpacing))
         AccessiblePrimaryButton(text = "Clear all filters", onClick = onClearFilters)
+        if (section != GallerySection.TRASH) {
+            Spacer(Modifier.height(Dimens.SmallSpacing))
+            AccessibleSecondaryButton(text = "Open trash", onClick = onOpenTrash)
+        }
     }
 }
 

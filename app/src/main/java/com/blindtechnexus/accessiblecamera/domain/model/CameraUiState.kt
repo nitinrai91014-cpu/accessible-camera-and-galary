@@ -125,8 +125,23 @@ data class CameraUiState(
     val levelDegrees: Float = 0f,
     val mirrorFrontCamera: Boolean = true,
     val faceGuidance: FaceGuidance = FaceGuidance.Disabled,
-    val faceGuidanceEnabled: Boolean = true,
+    /** How often ML Kit checks face alignment. Off disables face guidance entirely. */
+    val faceDetectionInterval: FaceDetectionInterval = FaceDetectionInterval.THREE_SECONDS,
+    /** How often the scene is described out loud. */
+    val sceneDescriptionInterval: SceneDescriptionInterval = SceneDescriptionInterval.OFF,
+    val barcodeScanningEnabled: Boolean = true,
+    val shutterSoundEnabled: Boolean = true,
     val sceneDescription: String? = null,
+    /** Latest barcode value read on demand, or an explanation that none was found. */
+    val lastBarcode: String? = null,
+    /** On-device ML Kit model installation state. */
+    val mlKitModelsReady: Boolean = false,
+    val mlKitInstalling: Boolean = false,
+    val mlKitProgress: Float = 0f,
+    val mlKitInstallMessage: String = "",
+    val mlKitFailure: String? = null,
+    val showMlKitDownloadPrompt: Boolean = false,
+    val describeSceneBusy: Boolean = false,
     val savedMediaCount: Int = 0,
     val lastSavedItem: MediaItem? = null,
     val burstModeActive: Boolean = false,
@@ -146,6 +161,16 @@ data class CameraUiState(
     val isFrontCamera: Boolean get() = activeLens?.facing == Facing.FRONT
     val canUseFlash: Boolean get() = activeLens?.hasFlash == true
     val canUseTorch: Boolean get() = activeLens?.hasFlash == true
+    val faceGuidanceEnabled: Boolean get() = faceDetectionInterval != FaceDetectionInterval.OFF
+    val sceneDescriptionEnabled: Boolean get() = sceneDescriptionInterval != SceneDescriptionInterval.OFF
+
+    /** Exact spoken label for the flip control, based on the lens currently in use. */
+    val cameraSwitchLabel: String
+        get() = if (isFrontCamera) "Switch to Rear Camera button" else "Switch to Front Camera button"
+
+    /** Short visible label for the same control. */
+    val cameraSwitchShortLabel: String
+        get() = if (isFrontCamera) "To rear" else "To front"
     val maxZoom: Float get() = activeLens?.zoomMax ?: capabilities.maxZoom
     val minZoom: Float get() = activeLens?.zoomMin ?: capabilities.minZoom
 
@@ -175,6 +200,7 @@ data class CameraUiState(
                 else -> Unit
             }
             sceneDescription?.let { append(it).append(". ") }
+            lastBarcode?.let { append(it).append(". ") }
         }
 }
 

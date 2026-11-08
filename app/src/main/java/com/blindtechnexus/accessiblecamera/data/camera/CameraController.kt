@@ -22,11 +22,13 @@ import androidx.camera.core.AspectRatio
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.MeteringPoint
 import androidx.camera.core.Preview
 import androidx.camera.core.TorchState
+import androidx.camera.core.UseCase
 import androidx.camera.core.ZoomState
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
@@ -42,9 +44,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.blindtechnexus.accessiblecamera.domain.model.AspectRatioOption
 import com.blindtechnexus.accessiblecamera.domain.model.ExposureMode
+import com.blindtechnexus.accessiblecamera.domain.model.Facing
 import com.blindtechnexus.accessiblecamera.domain.model.FlashMode
 import com.blindtechnexus.accessiblecamera.domain.model.FocusMode
 import com.blindtechnexus.accessiblecamera.domain.model.LensInfo
+import com.blindtechnexus.accessiblecamera.domain.model.LensType
 import com.blindtechnexus.accessiblecamera.domain.model.PhotoFileFormat
 import com.blindtechnexus.accessiblecamera.domain.model.StabilizationMode
 import com.blindtechnexus.accessiblecamera.domain.model.WhiteBalanceMode
@@ -54,16 +58,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Owns CameraX use cases and Camera2 interop.
+ * Owns every CameraX use case and all Camera2 interop.
  *
- * All hardware interaction lives here so the ViewModel only consumes flows. Bindings are
- * guarded by a lock because CameraX binding is not re-entrant, and every call is main
- * thread safe.
+ * Design rules:
+ * - CameraX is the only source of truth for whether a camera exists. The controller asks the
+ *   provider directly, so a camera that Android exposes can always be opened even if a
+ *   metadata read failed earlier.
+ * - Binding is attempted from the richest configuration towards simpler ones. Some devices
+ *   reject a three use case combination such as preview plus photo plus video plus analysis;
+ *   instead of failing the whole camera, the next attempt drops video and then analysis.
+ * - Observers are attached on the main thread and removed when the camera is unbound, so
+ *   repeated lens switches cannot leak live data observers or stack duplicate callbacks.
+ * - All hardware interaction lives here; the ViewModel only consumes flows.
  */
 @Singleton
 class CameraController @Inject constructor(
@@ -72,6 +84,7 @@ class CameraController @Inject constructor(
 
     private companion object {
         const val TAG = "CameraController"
+        const val PROVIDER_TIMEOUT_SECONDS = 5L
     }
 
     private val bindingLock = Any()
@@ -80,8 +93,12 @@ class CameraController @Inject constructor(
     private var preview: Preview? = null
     private var imageCapture: ImageCapture? = null
     private var videoCapture: VideoCapture<Recorder>? = null
-    private var imageAnalysis: androidx.camera.core.ImageAnalysis? = null
+    private var imageAnalysis: ImageAnalysis? = null
     private var activeRecording: Recording? = null
+    private var observeOwner: LifecycleOwner? = null
+
+    /** True while a recording has been started and not yet finalised. */
+    private val recordingInFlight = MutableStateFlow(false)
 
     private val _torchOn = MutableStateFlow(false)
     val torchOn: StateFlow<Boolean> = _torchOn.asStateFlow()
@@ -103,21 +120,99 @@ class CameraController @Inject constructor(
     val captureExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val videoExecutor: ExecutorService = Executors.newFixedThreadPool(2)
 
-    /** Current bound camera info if any. */
+    /** Current bound camera, or null when nothing is bound. */
     fun boundCamera(): Camera? = camera
 
-    /** Retrieves and caches the process camera provider. */
+    /**
+     * Retrieves and caches the process camera provider.
+     *
+     * Awaiting this future is the only correct way to know the camera stack is ready; it
+     * resolves after the camera service has enumerated its devices.
+     */
     suspend fun provider(): ProcessCameraProvider? {
         cameraProvider?.let { return it }
         val future = ProcessCameraProvider.getInstance(context)
         return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
             future.addListener({
-                val value = runCatching { future.get() }.getOrNull()
+                val value = runCatching { future.get() }
+                    .onFailure { Log.w(TAG, "Camera provider failed", it) }
+                    .getOrNull()
                 cameraProvider = value
-                if (continuation.isActive) continuation.resume(value) { }
+                if (continuation.isActive) continuation.resumeWith(Result.success(value))
             }, ContextCompat.getMainExecutor(context))
             continuation.invokeOnCancellation { }
         }
+    }
+
+    private fun providerBlocking(): ProcessCameraProvider? {
+        cameraProvider?.let { return it }
+        val future = ProcessCameraProvider.getInstance(context)
+        val value = runCatching { future.get(PROVIDER_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
+            .onFailure { Log.w(TAG, "Timed out waiting for the camera provider", it) }
+            .getOrNull()
+        cameraProvider = value
+        return value
+    }
+
+    /** Camera devices currently reported by the camera service. */
+    fun cameraCount(): Int =
+        runCatching { providerBlocking()?.availableCameraInfos?.size ?: 0 }.getOrDefault(0)
+
+    /** True when the selector resolves to a camera this device can actually open. */
+    fun hasCamera(selector: CameraSelector): Boolean {
+        val provider = providerBlocking() ?: return false
+        return runCatching { provider.hasCamera(selector) }.getOrDefault(false)
+    }
+
+    /** True when this device exposes at least one camera of [facing]. */
+    fun hasCameraFor(facing: Facing): Boolean =
+        hasCamera(CameraSelector.Builder().requireLensFacing(facingSelector(facing)).build())
+
+    /**
+     * Best available lens for a facing, used when capability detection has not produced a
+     * lens list yet. Returns null when no camera of that facing exists.
+     */
+    fun defaultLens(facing: Facing = Facing.BACK): LensInfo? {
+        val provider = providerBlocking() ?: return null
+        val infos = provider.availableCameraInfos
+        val target = facingSelector(facing)
+        val info = infos.firstOrNull { it.lensFacing == target }
+            ?: infos.firstOrNull()
+            ?: return null
+        val resolvedFacing = when (info.lensFacing) {
+            CameraSelector.LENS_FACING_FRONT -> Facing.FRONT
+            CameraSelector.LENS_FACING_BACK -> Facing.BACK
+            else -> Facing.EXTERNAL
+        }
+        val zoom = info.zoomState.value
+        return LensInfo(
+            id = runCatching {
+                androidx.camera.camera2.interop.Camera2CameraInfo.from(info).cameraId
+            }.getOrDefault("default"),
+            type = if (resolvedFacing == Facing.FRONT) LensType.FRONT else LensType.WIDE,
+            facing = resolvedFacing,
+            zoomMin = zoom?.minZoomRatio ?: 1f,
+            zoomMax = zoom?.maxZoomRatio ?: 1f,
+            focalLengthMm = null,
+            hasFlash = runCatching { info.hasFlashUnit() }.getOrDefault(false),
+            hasAutofocus = false,
+            maxResolutionWidth = 0,
+            maxResolutionHeight = 0,
+            supportsRaw = false,
+            supportsManualIso = false,
+            isoRange = null,
+            exposureTimeRangeNanos = null,
+            supportsManualFocus = false,
+            supportsWhiteBalanceControl = false,
+            supportsAeLock = false,
+            supportsAfLock = false,
+            supportsAwbLock = false,
+            supportsOpticalStabilization = false,
+            supportsVideoStabilization = false,
+            supportsHdrVideo = false,
+            maxVideoFrameRate = 30,
+            hardwareLevel = "Unknown"
+        )
     }
 
     data class BindRequest(
@@ -138,153 +233,239 @@ class CameraController @Inject constructor(
         val enableAnalysis: Boolean = false
     )
 
+    private data class UseCaseSet(
+        val preview: Preview,
+        val imageCapture: ImageCapture,
+        val videoCapture: VideoCapture<Recorder>?,
+        val analysis: ImageAnalysis?
+    )
+
     /**
-     * Binds preview, photo capture and optionally video capture.
-     * Returns null on success or a spoken-ready error message.
+     * Binds preview, photo capture and, when requested and possible, video and analysis.
+     *
+     * Returns null on success or a spoken-ready error message. Binding is attempted in
+     * decreasing complexity so an unsupported use case combination degrades the feature
+     * instead of disabling the camera.
      */
     fun bind(request: BindRequest): String? = synchronized(bindingLock) {
-        val provider = cameraProvider ?: run {
-            val future = ProcessCameraProvider.getInstance(context)
-            val value = runCatching { future.get(2, java.util.concurrent.TimeUnit.SECONDS) }.getOrNull()
-            cameraProvider = value
-            value
-        } ?: return "The camera provider is not ready yet."
+        val provider = providerBlocking()
+            ?: return "The camera service is not available yet. Try again in a moment."
 
-        return runCatching {
-            provider.unbindAll()
-            val selector = selectorForLens(request.lens)
+        val selector = resolveSelector(provider, request.lens)
+            ?: return "No usable camera was found for this device."
 
-            val previewBuilder = Preview.Builder()
-                .setTargetAspectRatio(aspectRatioConstant(request.aspectRatio))
-                .setTargetRotation(request.targetRotation)
-            val newPreview = previewBuilder.build().also {
-                it.setSurfaceProvider(request.previewView.surfaceProvider)
-            }
+        val rotation = if (request.targetRotation in 0..3) request.targetRotation else displayRotation()
+        val attempts = buildList {
+            add(Triple(request.enableVideo, request.enableAnalysis, "full configuration"))
+            if (request.enableVideo) add(Triple(false, request.enableAnalysis, "without video"))
+            if (request.enableAnalysis) add(Triple(request.enableVideo, false, "without frame analysis"))
+            if (request.enableVideo && request.enableAnalysis) add(Triple(false, false, "preview and photo only"))
+        }
 
-            val captureBuilder = ImageCapture.Builder()
-                .setCaptureMode(
-                    if (request.captureModeFast) {
-                        ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
-                    } else {
-                        ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
-                    }
+        var lastFailure: Throwable? = null
+        attempts.forEach { (enableVideo, enableAnalysis, label) ->
+            val result = runCatching {
+                provider.unbindAll()
+                val useCases = buildUseCases(request, rotation, enableVideo, enableAnalysis)
+                val bound = provider.bindToLifecycle(
+                    request.lifecycleOwner,
+                    selector,
+                    *listOfNotNull(
+                        useCases.preview,
+                        useCases.imageCapture,
+                        useCases.videoCapture,
+                        useCases.analysis
+                    ).toTypedArray()
                 )
-                .setTargetAspectRatio(aspectRatioConstant(request.aspectRatio))
-                .setTargetRotation(request.targetRotation)
-                .setFlashMode(request.flashMode.toImageCaptureFlash())
-
-            if (request.photoFormat == PhotoFileFormat.RAW_JPEG &&
-                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-            ) {
-                runCatching {
-                    Camera2Interop.Extender(captureBuilder)
-                        .setCaptureRequestOption(
-                            CaptureRequest.CONTROL_AE_MODE,
-                            CaptureRequest.CONTROL_AE_MODE_ON
-                        )
-                }
+                Triple(useCases, bound, label)
             }
-
-            val newImageCapture = captureBuilder.build()
-
-            val useCases = mutableListOf<androidx.camera.core.UseCase>(newPreview, newImageCapture)
-
-            var newAnalysis: androidx.camera.core.ImageAnalysis? = null
-            if (request.enableAnalysis) {
-                val analysisBuilder = androidx.camera.core.ImageAnalysis.Builder()
-                    .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setTargetRotation(request.targetRotation)
-                newAnalysis = runCatching { analysisBuilder.build() }.getOrNull()
-                newAnalysis?.let { useCases += it }
+            result.onSuccess { (useCases, bound, usedLabel) ->
+                attach(provider, request, useCases, bound)
+                Log.i(TAG, "Camera bound with $usedLabel")
+                return null
             }
-            var newVideoCapture: VideoCapture<Recorder>? = null
-            if (request.enableVideo) {
-                val quality = qualityFromLabel(request.videoQualityLabel)
-                val recorderBuilder = Recorder.Builder()
-                    .setExecutor(videoExecutor)
-                    .setQualitySelector(
-                        QualitySelector.from(quality, FallbackStrategy.lowerQualityOrHigherThan(quality))
-                    )
-                if (request.videoBitrate > 0) {
-                    runCatching { recorderBuilder.setTargetVideoEncodingBitRate(request.videoBitrate) }
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    runCatching { recorderBuilder.setAspectRatio(aspectRatioConstant(request.aspectRatio)) }
-                }
-                val recorder = recorderBuilder.build()
-                newVideoCapture = VideoCapture.withOutput(recorder)
-                newVideoCapture.setTargetRotation(request.targetRotation)
-                useCases += newVideoCapture
-            }
+            lastFailure = result.exceptionOrNull()
+            Log.w(TAG, "Camera binding failed with $label", result.exceptionOrNull())
+        }
 
-            val boundCamera = provider.bindToLifecycle(request.lifecycleOwner, selector, *useCases.toTypedArray())
-
-            preview = newPreview
-            imageCapture = newImageCapture
-            imageAnalysis = newAnalysis
-            videoCapture = newVideoCapture
-            camera = boundCamera
-
-            boundCamera.cameraInfo.torchState.observe(request.lifecycleOwner) { state ->
-                _torchOn.value = state == TorchState.ON
-            }
-            boundCamera.cameraInfo.zoomState.observe(request.lifecycleOwner) { state ->
-                state?.let { _zoomRatio.value = it.zoomRatio }
-            }
-            boundCamera.cameraInfo.cameraState.observe(request.lifecycleOwner) { state ->
-                state?.error?.let { error ->
-                    _cameraError.value = CameraErrors.describeCameraErrorCode(error.code)
-                }
-            }
-
-            applyStabilization(request.stabilization)
-            runCatching { request.previewView.scaleType = PreviewView.ScaleType.FILL_CENTER }
-            if (request.mirrorFrontCamera && request.lens?.facing == com.blindtechnexus.accessiblecamera.domain.model.Facing.FRONT) {
-                runCatching { request.previewView.scaleX = -1f }
-            } else {
-                runCatching { request.previewView.scaleX = 1f }
-            }
-            _isBound.value = true
-            _cameraError.value = null
-            null
-        }.getOrElse { throwable ->
-            Log.w(TAG, "Camera binding failed", throwable)
-            _isBound.value = false
-            when {
-                throwable.message?.contains("in use", ignoreCase = true) == true ->
-                    "The camera is in use by another app."
-                throwable.message?.contains("Too many cameras", ignoreCase = true) == true ->
-                    "Too many cameras are already open."
-                else -> "The camera could not be started. ${throwable.message ?: "Unknown error"}"
-            }
+        provider.unbindAll()
+        clearBindings()
+        _isBound.value = false
+        when {
+            lastFailure?.message?.contains("in use", ignoreCase = true) == true ->
+                "The camera is in use by another app."
+            lastFailure?.message?.contains("Too many cameras", ignoreCase = true) == true ->
+                "Too many cameras are already open."
+            else -> "The camera could not be started. ${lastFailure?.message ?: "Unknown error"}"
         }
     }
 
+    private fun resolveSelector(provider: ProcessCameraProvider, lens: LensInfo?): CameraSelector? {
+        val preferred = selectorForLens(lens)
+        if (runCatching { provider.hasCamera(preferred) }.getOrDefault(false)) return preferred
+
+        // The stored lens may be stale after a camera service restart or a hot plug. Fall
+        // back to any camera of the same facing, then to any camera at all.
+        val facing = lens?.facing ?: Facing.BACK
+        val byFacing = CameraSelector.Builder().requireLensFacing(facingSelector(facing)).build()
+        if (runCatching { provider.hasCamera(byFacing) }.getOrDefault(false)) return byFacing
+
+        val anyCamera = provider.availableCameraInfos.firstOrNull() ?: return null
+        val anySelector = when (anyCamera.lensFacing) {
+            CameraSelector.LENS_FACING_FRONT -> CameraSelector.DEFAULT_FRONT_CAMERA
+            CameraSelector.LENS_FACING_BACK -> CameraSelector.DEFAULT_BACK_CAMERA
+            else -> CameraSelector.DEFAULT_BACK_CAMERA
+        }
+        return if (runCatching { provider.hasCamera(anySelector) }.getOrDefault(false)) anySelector else null
+    }
+
+    private fun buildUseCases(
+        request: BindRequest,
+        rotation: Int,
+        enableVideo: Boolean,
+        enableAnalysis: Boolean
+    ): UseCaseSet {
+        val newPreview = Preview.Builder()
+            .setTargetAspectRatio(aspectRatioConstant(request.aspectRatio))
+            .setTargetRotation(rotation)
+            .build()
+            .also { it.setSurfaceProvider(request.previewView.surfaceProvider) }
+
+        val captureBuilder = ImageCapture.Builder()
+            .setCaptureMode(
+                if (request.captureModeFast) {
+                    ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+                } else {
+                    ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+                }
+            )
+            .setTargetAspectRatio(aspectRatioConstant(request.aspectRatio))
+            .setTargetRotation(rotation)
+            .setFlashMode(request.flashMode.toImageCaptureFlash())
+
+        if (request.photoFormat == PhotoFileFormat.RAW_JPEG && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            runCatching {
+                Camera2Interop.Extender(captureBuilder)
+                    .setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_ON
+                    )
+            }
+        }
+
+        val newImageCapture = captureBuilder.build()
+
+        var newAnalysis: ImageAnalysis? = null
+        if (enableAnalysis) {
+            newAnalysis = runCatching {
+                ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setTargetRotation(rotation)
+                    .build()
+            }.getOrNull()
+        }
+
+        var newVideoCapture: VideoCapture<Recorder>? = null
+        if (enableVideo) {
+            val quality = qualityFromLabel(request.videoQualityLabel)
+            val recorderBuilder = Recorder.Builder()
+                .setExecutor(videoExecutor)
+                .setQualitySelector(
+                    QualitySelector.from(quality, FallbackStrategy.lowerQualityOrHigherThan(quality))
+                )
+            if (request.videoBitrate > 0) {
+                runCatching { recorderBuilder.setTargetVideoEncodingBitRate(request.videoBitrate) }
+            }
+            runCatching {
+                val recorder = recorderBuilder.build()
+                newVideoCapture = VideoCapture.withOutput(recorder).also {
+                    it.setTargetRotation(rotation)
+                }
+            }
+        }
+
+        return UseCaseSet(newPreview, newImageCapture, newVideoCapture, newAnalysis)
+    }
+
+    private fun attach(
+        provider: ProcessCameraProvider,
+        request: BindRequest,
+        useCases: UseCaseSet,
+        bound: Camera
+    ) {
+        preview = useCases.preview
+        imageCapture = useCases.imageCapture
+        videoCapture = useCases.videoCapture
+        imageAnalysis = useCases.analysis
+        camera = bound
+
+        val owner = request.lifecycleOwner
+        observeOwner = owner
+        val mainExecutor = ContextCompat.getMainExecutor(context)
+        mainExecutor.execute {
+            runCatching {
+                bound.cameraInfo.torchState.observe(owner) { state ->
+                    _torchOn.value = state == TorchState.ON
+                }
+                bound.cameraInfo.zoomState.observe(owner) { state ->
+                    state?.let { _zoomRatio.value = it.zoomRatio }
+                }
+                bound.cameraInfo.cameraState.observe(owner) { state ->
+                    state?.error?.let { error ->
+                        _cameraError.value = CameraErrors.describeCameraErrorCode(error.code)
+                    }
+                }
+            }.onFailure { Log.w(TAG, "Camera observers could not be attached", it) }
+
+            runCatching {
+                request.previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+                request.previewView.scaleX = if (
+                    request.mirrorFrontCamera && request.lens?.facing == Facing.FRONT
+                ) {
+                    -1f
+                } else {
+                    1f
+                }
+            }
+        }
+
+        applyStabilization(request.stabilization)
+        if (_torchOn.value && bound.cameraInfo.hasFlashUnit()) {
+            runCatching { bound.cameraControl.enableTorch(true) }
+        }
+        _isBound.value = true
+        _cameraError.value = null
+    }
+
+    private fun clearBindings() {
+        preview = null
+        imageCapture = null
+        videoCapture = null
+        runCatching { imageAnalysis?.clearAnalyzer() }
+        imageAnalysis = null
+        camera = null
+        observeOwner = null
+    }
+
     /** The bound analysis use case, or null when analysis was not requested. */
-    fun analysisUseCase(): androidx.camera.core.ImageAnalysis? = imageAnalysis
+    fun analysisUseCase(): ImageAnalysis? = imageAnalysis
 
     fun unbind() {
         synchronized(bindingLock) {
+            stopRecording()
             runCatching { cameraProvider?.unbindAll() }
-            preview = null
-            imageCapture = null
-            videoCapture = null
-            runCatching { imageAnalysis?.clearAnalyzer() }
-            imageAnalysis = null
-            camera = null
+            clearBindings()
             _isBound.value = false
             _torchOn.value = false
         }
     }
 
+    /** CameraX selector for a stored lens, filtered to that exact camera when possible. */
     fun selectorForLens(lens: LensInfo?): CameraSelector {
-        val facing = when (lens?.facing) {
-            com.blindtechnexus.accessiblecamera.domain.model.Facing.FRONT -> CameraSelector.LENS_FACING_FRONT
-            com.blindtechnexus.accessiblecamera.domain.model.Facing.EXTERNAL -> CameraSelector.LENS_FACING_EXTERNAL
-            else -> CameraSelector.LENS_FACING_BACK
+        val facing = facingSelector(lens?.facing ?: Facing.BACK)
+        if (lens == null) {
+            return CameraSelector.Builder().requireLensFacing(facing).build()
         }
-        val base = CameraSelector.Builder().requireLensFacing(facing).build()
-        if (lens == null) return base
         return CameraSelector.Builder()
             .requireLensFacing(facing)
             .addCameraFilter { infos ->
@@ -293,9 +474,17 @@ class CameraController @Inject constructor(
                         androidx.camera.camera2.interop.Camera2CameraInfo.from(info).cameraId == lens.id
                     }.getOrDefault(false)
                 }
+                // An empty list here would make CameraX throw "No available camera can be
+                // found"; keeping the original list lets CameraX select the right facing.
                 if (filtered.isEmpty()) infos else filtered
             }
             .build()
+    }
+
+    private fun facingSelector(facing: Facing): Int = when (facing) {
+        Facing.FRONT -> CameraSelector.LENS_FACING_FRONT
+        Facing.EXTERNAL -> CameraSelector.LENS_FACING_EXTERNAL
+        Facing.BACK -> CameraSelector.LENS_FACING_BACK
     }
 
     // region Photo capture
@@ -317,27 +506,26 @@ class CameraController @Inject constructor(
         capture.flashMode = flashMode.toImageCaptureFlash()
         val options = ImageCapture.OutputFileOptions.Builder(file).build()
         val mainExecutor = ContextCompat.getMainExecutor(context)
-        capture.takePicture(
-            options,
-            captureExecutor,
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                    mainExecutor.execute {
-                        outputFileResults.savedUri?.let { uri ->
-                            runCatching { context.contentResolver.openOutputStream(uri)?.close() }
-                        }
-                        onResult(Result.success(file))
+        runCatching {
+            capture.takePicture(
+                options,
+                captureExecutor,
+                object : ImageCapture.OnImageSavedCallback {
+                    override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                        mainExecutor.execute { onResult(Result.success(file)) }
                     }
-                }
 
-                override fun onError(exception: ImageCaptureException) {
-                    mainExecutor.execute {
-                        Log.w(TAG, "Photo capture failed", exception)
-                        onResult(Result.failure(exception))
+                    override fun onError(exception: ImageCaptureException) {
+                        mainExecutor.execute {
+                            Log.w(TAG, "Photo capture failed", exception)
+                            onResult(Result.failure(exception))
+                        }
                     }
                 }
-            }
-        )
+            )
+        }.onFailure { error ->
+            mainExecutor.execute { onResult(Result.failure(error)) }
+        }
     }
 
     // endregion
@@ -359,25 +547,29 @@ class CameraController @Inject constructor(
         val options = FileOutputOptions.Builder(file).build()
         val mainExecutor = ContextCompat.getMainExecutor(context)
         return runCatching {
-            val pending = capture.output.prepareRecording(context, options)
+            var pending = capture.output.prepareRecording(context, options)
             if (withAudio && _audioAvailable.value) {
-                runCatching { pending.withAudioEnabled() }
+                pending = runCatching { pending.withAudioEnabled() }.getOrDefault(pending)
             }
             activeRecording = pending.start(mainExecutor) { event ->
                 when (event) {
                     is VideoRecordEvent.Start -> {
                         _videoRecording.value = true
+                        recordingInFlight.value = true
                     }
                     is VideoRecordEvent.Finalize -> {
                         _videoRecording.value = false
+                        recordingInFlight.value = false
                         activeRecording = null
                     }
+                    else -> Unit
                 }
                 onEvent(event)
             }
             null
         }.getOrElse { throwable ->
             Log.w(TAG, "Recording could not start", throwable)
+            activeRecording = null
             "Recording could not start. ${throwable.message ?: ""}"
         }
     }
@@ -396,9 +588,10 @@ class CameraController @Inject constructor(
         runCatching { activeRecording?.stop() }
         activeRecording = null
         _videoRecording.value = false
+        recordingInFlight.value = false
     }
 
-    fun isRecording(): Boolean = activeRecording != null
+    fun isRecording(): Boolean = activeRecording != null || recordingInFlight.value
 
     fun setAudioPermission(granted: Boolean) {
         _audioAvailable.value = granted
@@ -431,7 +624,7 @@ class CameraController @Inject constructor(
         val action = FocusMeteringAction.Builder(
             point,
             FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
-        ).setAutoCancelDuration(5, java.util.concurrent.TimeUnit.SECONDS).build()
+        ).setAutoCancelDuration(5, TimeUnit.SECONDS).build()
         runCatching { bound.cameraControl.startFocusAndMetering(action) }
     }
 
@@ -470,6 +663,7 @@ class CameraController @Inject constructor(
         if (!bound.cameraInfo.hasFlashUnit()) return false
         return runCatching {
             bound.cameraControl.enableTorch(enabled)
+            _torchOn.value = enabled
             true
         }.getOrDefault(false)
     }
